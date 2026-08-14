@@ -2151,4 +2151,14 @@ function init(){
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+// Registering a (deliberately no-cache) service worker is what lets Android Chrome offer a real
+// full-screen "Install" instead of a plain bookmark shortcut that still shows the URL bar. Feature-
+// detected and non-fatal — older browsers without SW support, or a failed registration, just fall
+// back to the same in-browser experience as before.
+if("serviceWorker" in navigator){
+  window.addEventListener("load", ()=>{
+    navigator.serviceWorker.register("sw.js").catch(()=>{ /* not fatal, app still works normally */ });
+  });
+}
 })();
