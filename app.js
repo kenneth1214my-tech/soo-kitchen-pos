@@ -1716,8 +1716,23 @@ function openComboEditModal(item, catId){
   document.getElementById("comboPriceInput").value = item ? item.price : "";
   populateComboCategorySelect(catId);
   document.getElementById("btnDeleteCombo").classList.toggle("hidden", !item);
+  document.getElementById("btnUncombo").classList.toggle("hidden", !item);
   renderComboEditList();
   showModal("comboEditModal");
+}
+
+// Reverts an existing combo back into a plain single-priced menu item — keeps the item (name,
+// price, photo) but clears comboItems, unlike deleteCombo() which removes it entirely.
+function uncombo(){
+  if(!comboEditItem) return;
+  if(!confirm(`确定把「${comboEditItem.name}」变回单点菜品?套餐组合内容会被清空,但这道菜本身会保留,价格不变。`)) return;
+  comboEditItem.comboItems = [];
+  saveState();
+  renderComboListEditor();
+  renderMenuEditor();
+  renderItemGridIfNeeded();
+  hideModal("comboEditModal");
+  alertToast("已变回单点菜品");
 }
 
 function renderComboEditList(){
@@ -1951,6 +1966,7 @@ function init(){
   document.getElementById("btnAddCombo").onclick = ()=> openComboEditModal(null, null);
   document.getElementById("btnSaveCombo").onclick = saveCombo;
   document.getElementById("btnDeleteCombo").onclick = deleteCombo;
+  document.getElementById("btnUncombo").onclick = uncombo;
   document.getElementById("btnClearHistory").onclick = ()=>{
     if(confirm("确定清空今天的所有订单记录?此操作无法撤销。")){
       const t = todayStr();
