@@ -1273,6 +1273,7 @@ let cloudUnsub = null;
 let cloudPushTimer = null;
 let applyingRemoteCloudState = false;
 let cloudLastError = null;
+let cloudPushInFlight = false;
 
 function loadCloudConfig(){
   try{ return JSON.parse(localStorage.getItem(CLOUD_KEY)) || null; }
@@ -1361,19 +1362,37 @@ function connectCloudSync(configObj, shopId, isReconnect){
     const cfg = loadCloudConfig();
     if(cfg){ cfg.lastSyncedAt = new Date().toISOString(); saveCloudConfig(cfg); }
 
+    if(snap.metadata.hasPendingWrites){
+      // Our own optimistic write echoing back before Firestore has confirmed it server-side —
+      // not new data from another device, so there's nothing to apply here.
+      renderCloudSyncStatus();
+      return;
+    }
+
     if(!snap.exists){
       pushCloudState();
       renderCloudSyncStatus();
       return;
     }
+
+    if(cloudPushTimer || cloudPushInFlight){
+      // This device has a local edit that hasn't reached the server yet (still debouncing or
+      // mid-request). Deliberately not comparing timestamps to decide who "wins" here — cheap
+      // tablets often have inaccurate clocks with no reliable time sync, which made an earlier
+      // version of this check silently ignore genuinely newer updates. Instead: whichever edit
+      // reaches the server last wins, and we simply skip applying incoming data while our own
+      // change is still in flight so it can't be clobbered before it's even sent.
+      renderCloudSyncStatus();
+      return;
+    }
+
     const remote = snap.data();
-    if(!remote || !remote.lastModified){ renderCloudSyncStatus(); return; }
-    if(remote.lastModified <= (state.lastModified||"")){ renderCloudSyncStatus(); return; }
+    if(!remote){ renderCloudSyncStatus(); return; }
 
     applyingRemoteCloudState = true;
     state.settings = Object.assign({}, state.settings, remote.settings||{});
     if(Array.isArray(remote.menu)) state.menu = remote.menu;
-    state.lastModified = remote.lastModified;
+    if(remote.lastModified) state.lastModified = remote.lastModified;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     applyingRemoteCloudState = false;
 
@@ -1416,6 +1435,8 @@ function stopCloudSync(){
   }
   cloudDb = null;
   cloudLastError = null;
+  if(cloudPushTimer){ clearTimeout(cloudPushTimer); cloudPushTimer = null; }
+  cloudPushInFlight = false;
   clearCloudConfig();
   renderCloudSyncStatus();
   alertToast("云端同步已断开");
@@ -1429,13 +1450,21 @@ function scheduleCloudPush(){
 }
 
 function pushCloudState(){
+  cloudPushTimer = null;
   const cfg = loadCloudConfig();
   if(!cfg || !cfg.enabled || !cloudDb) return;
+  cloudPushInFlight = true;
   cloudDocRef(cfg.shopId).set(cloudSyncableSnapshot(), {merge:true}).then(()=>{
+    cloudPushInFlight = false;
+    cloudLastError = null;
     cfg.lastSyncedAt = new Date().toISOString();
     saveCloudConfig(cfg);
     renderCloudSyncStatus();
-  }).catch(()=>{ /* transient network failure — next save() will retry via scheduleCloudPush */ });
+  }).catch(err=>{
+    cloudPushInFlight = false;
+    cloudLastError = (err && err.message) ? err.message : "推送失败";
+    renderCloudSyncStatus();
+  });
 }
 
 function initCloudSyncOnLoad(){
