@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202608142330">
+<link rel="manifest" href="manifest.json?v=202608142331">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202608142330">
-<link rel="icon" href="icon-192.png?v=202608142330">
-<link rel="stylesheet" href="style.css?v=202608142330">
+<link rel="apple-touch-icon" href="icon-192.png?v=202608142331">
+<link rel="icon" href="icon-192.png?v=202608142331">
+<link rel="stylesheet" href="style.css?v=202608142331">
 </head>
 <body>
 
@@ -262,6 +262,7 @@
         <button class="settings-tab" data-tab="menu">菜单管理</button>
         <button class="settings-tab" data-tab="combo">套餐管理</button>
         <button class="settings-tab" data-tab="promo">优惠管理</button>
+        <button class="settings-tab" data-tab="cloud">云端同步</button>
       </div>
 
       <div id="tabGeneral" class="settings-panel">
@@ -354,10 +355,31 @@
         </div>
         <div id="promoEditorList"></div>
       </div>
+
+      <div id="tabCloud" class="settings-panel hidden">
+        <p class="hint" style="text-align:left;">同步菜单、套餐、优惠、店铺设置到其他设备(不同步销售记录/挂单)。需要先在 Firebase 官网建一个免费项目,把项目配置贴在下面——两台设备都要贴同一份配置、填同一个店铺代号。</p>
+
+        <label>Firebase 项目配置 (从 Firebase 后台复制整段贴过来)</label>
+        <textarea id="cloudConfigInput" rows="5" placeholder='{"apiKey":"...", "authDomain":"...", "projectId":"...", ...}' style="width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:13px;font-family:monospace;"></textarea>
+
+        <label>店铺代号 (两台设备要填一样的,当作同步密钥,不要泄露给不相关的人)</label>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="cloudShopIdInput" style="flex:1;padding:12px;border:1px solid var(--border);border-radius:10px;" placeholder="例如一串随机字母数字">
+          <button id="btnGenShopId" class="secondary-btn">自动生成</button>
+        </div>
+
+        <div class="backup-actions" style="margin-top:14px;">
+          <button id="btnCloudConnect" class="primary-btn" style="width:100%;margin:0;">连接云端同步</button>
+        </div>
+        <button id="btnCloudDisconnect" class="danger-btn hidden" style="margin-top:10px;">断开云端同步</button>
+        <p id="cloudSyncStatus" class="hint" style="text-align:left;">尚未连接</p>
+      </div>
     </div>
   </div>
 </div>
 
-<script src="app.js?v=202608142330"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
+<script src="app.js?v=202608142331" defer></script>
 </body>
 </html>

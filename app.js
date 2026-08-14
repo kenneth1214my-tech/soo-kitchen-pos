@@ -57,6 +57,7 @@ function loadState(){
 function saveState(){
   state.lastModified = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if(!applyingRemoteCloudState) scheduleCloudPush();
 }
 
 function loadHistory(){
@@ -1130,6 +1131,7 @@ function populateSettingsForm(){
   renderComboListEditor();
   renderPromoEditor();
   renderLastBackupStatus();
+  renderCloudSyncStatus();
   if(!document.getElementById("csvStartDate").value) setCsvRange("today");
 }
 
@@ -1257,6 +1259,187 @@ function maybeShowBackupReminder(){
   if(daysSinceLastBackup() >= BACKUP_REMIND_DAYS){
     alertToast("已经好几天没备份了,建议去设置导出一次");
   }
+}
+
+// ---------- Cloud sync (Firebase Firestore) ----------
+// Optional: only syncs the editable/shared subset of state (menu + settings, including
+// promotions) across devices. Sales history, held orders, and the order-number counter stay
+// local per device on purpose (they're not meant to be merged across two tills). Uses an
+// unguessable shop-ID document path instead of real auth — acceptable tradeoff for a single
+// low-value-target shop, not a multi-tenant SaaS.
+const CLOUD_KEY = "sk_pos_cloud_v1";
+let cloudDb = null;
+let cloudUnsub = null;
+let cloudPushTimer = null;
+let applyingRemoteCloudState = false;
+let cloudLastError = null;
+
+function loadCloudConfig(){
+  try{ return JSON.parse(localStorage.getItem(CLOUD_KEY)) || null; }
+  catch(e){ return null; }
+}
+function saveCloudConfig(cfg){ localStorage.setItem(CLOUD_KEY, JSON.stringify(cfg)); }
+function clearCloudConfig(){ localStorage.removeItem(CLOUD_KEY); }
+
+function genShopId(){
+  const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+  let out = "";
+  for(let i=0;i<16;i++) out += chars[Math.floor(Math.random()*chars.length)];
+  return out;
+}
+
+// Only the fields that are meant to be shared across devices — not orders/held/seq.
+function cloudSyncableSnapshot(){
+  return {
+    settings: state.settings,
+    menu: state.menu,
+    lastModified: state.lastModified
+  };
+}
+
+function cloudDocRef(shopId){
+  return cloudDb.collection("posShops").doc(shopId);
+}
+
+function renderCloudSyncStatus(){
+  const statusEl = document.getElementById("cloudSyncStatus");
+  const connectBtn = document.getElementById("btnCloudConnect");
+  const disconnectBtn = document.getElementById("btnCloudDisconnect");
+  if(!statusEl) return;
+  const cfg = loadCloudConfig();
+  if(cfg && cfg.enabled){
+    document.getElementById("cloudConfigInput").value = cfg.configText || "";
+    document.getElementById("cloudShopIdInput").value = cfg.shopId || "";
+    connectBtn.classList.add("hidden");
+    disconnectBtn.classList.remove("hidden");
+    if(cloudLastError){
+      statusEl.textContent = `⚠️ 连接失败: ${cloudLastError} — 请检查配置、店铺代号和 Firestore 规则`;
+      statusEl.style.color = "var(--danger)";
+    }else if(!cloudDb){
+      statusEl.textContent = "⚠️ 未连接 (刷新页面后会自动重连)";
+      statusEl.style.color = "var(--danger)";
+    }else{
+      const last = cfg.lastSyncedAt ? new Date(cfg.lastSyncedAt).toLocaleString("en-MY") : "尚未同步";
+      statusEl.textContent = `✅ 已连接 — 店铺代号: ${cfg.shopId} — 上次同步: ${last}`;
+      statusEl.style.color = "var(--text-mute)";
+    }
+  }else{
+    connectBtn.classList.remove("hidden");
+    disconnectBtn.classList.add("hidden");
+    statusEl.textContent = "尚未连接";
+    statusEl.style.color = "var(--text-mute)";
+  }
+}
+
+function connectCloudSync(configObj, shopId, isReconnect){
+  if(typeof firebase === "undefined"){
+    alertToast("云端功能加载失败,请检查网络后重新整理页面");
+    return;
+  }
+  cloudLastError = null;
+  try{
+    // Reusing an existing app with a different config (e.g. user pasted a new project after a
+    // previous connect, without reloading the page) would silently keep talking to the old
+    // project — delete any existing app first so initializeApp always picks up the latest config.
+    if(firebase.apps && firebase.apps.length){
+      firebase.apps.slice().forEach(a=>{ try{ a.delete(); }catch(e){} });
+    }
+    const app = firebase.initializeApp(configObj);
+    cloudDb = firebase.firestore(app);
+  }catch(e){
+    alertToast("Firebase 配置有误,请检查后重新贴上");
+    return;
+  }
+
+  if(cloudUnsub){ cloudUnsub(); cloudUnsub = null; }
+  cloudUnsub = cloudDocRef(shopId).onSnapshot(snap=>{
+    cloudLastError = null;
+    if(!snap.exists){
+      pushCloudState();
+      renderCloudSyncStatus();
+      return;
+    }
+    const remote = snap.data();
+    if(!remote || !remote.lastModified){ renderCloudSyncStatus(); return; }
+    if(remote.lastModified <= (state.lastModified||"")){ renderCloudSyncStatus(); return; }
+
+    applyingRemoteCloudState = true;
+    state.settings = Object.assign({}, state.settings, remote.settings||{});
+    if(Array.isArray(remote.menu)) state.menu = remote.menu;
+    state.lastModified = remote.lastModified;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    applyingRemoteCloudState = false;
+
+    const cfg = loadCloudConfig();
+    if(cfg){ cfg.lastSyncedAt = new Date().toISOString(); saveCloudConfig(cfg); }
+    document.getElementById("shopName").textContent = state.settings.shopName;
+    renderCategoryTabs();
+    renderItemGrid();
+    renderCart();
+    if(!document.getElementById("settingsModal").classList.contains("hidden")) populateSettingsForm();
+    renderCloudSyncStatus();
+    if(!isReconnect) alertToast("已从云端同步最新数据");
+  }, err=>{
+    cloudLastError = (err && err.message) ? err.message : "未知错误";
+    renderCloudSyncStatus();
+  });
+
+  if(!isReconnect) alertToast("云端同步已连接");
+}
+
+function startCloudSync(){
+  const configText = document.getElementById("cloudConfigInput").value.trim();
+  const shopId = document.getElementById("cloudShopIdInput").value.trim();
+  if(!configText || !shopId){
+    alertToast("请先贴上 Firebase 配置并填写店铺代号");
+    return;
+  }
+  let configObj;
+  try{ configObj = JSON.parse(configText); }
+  catch(e){ alertToast("Firebase 配置格式不对,请确认整段 JSON 都贴上了"); return; }
+
+  saveCloudConfig({ enabled:true, configText, shopId, lastSyncedAt:"" });
+  connectCloudSync(configObj, shopId, false);
+  renderCloudSyncStatus();
+}
+
+function stopCloudSync(){
+  if(!confirm("确定断开云端同步?本机数据不会被删除。")) return;
+  if(cloudUnsub){ cloudUnsub(); cloudUnsub = null; }
+  if(typeof firebase !== "undefined" && firebase.apps && firebase.apps.length){
+    firebase.apps.slice().forEach(a=>{ try{ a.delete(); }catch(e){} });
+  }
+  cloudDb = null;
+  cloudLastError = null;
+  clearCloudConfig();
+  renderCloudSyncStatus();
+  alertToast("云端同步已断开");
+}
+
+function scheduleCloudPush(){
+  const cfg = loadCloudConfig();
+  if(!cfg || !cfg.enabled) return;
+  if(cloudPushTimer) clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(pushCloudState, 1200);
+}
+
+function pushCloudState(){
+  const cfg = loadCloudConfig();
+  if(!cfg || !cfg.enabled || !cloudDb) return;
+  cloudDocRef(cfg.shopId).set(cloudSyncableSnapshot(), {merge:true}).then(()=>{
+    cfg.lastSyncedAt = new Date().toISOString();
+    saveCloudConfig(cfg);
+    renderCloudSyncStatus();
+  }).catch(()=>{ /* transient network failure — next save() will retry via scheduleCloudPush */ });
+}
+
+function initCloudSyncOnLoad(){
+  const cfg = loadCloudConfig();
+  if(!cfg || !cfg.enabled) return;
+  let configObj;
+  try{ configObj = JSON.parse(cfg.configText); }
+  catch(e){ return; }
+  connectCloudSync(configObj, cfg.shopId, true);
 }
 
 function exportBackup(){
@@ -2137,6 +2320,7 @@ function init(){
   maybeShowBackupReminder();
   tickClock();
   setInterval(tickClock, 15000);
+  initCloudSyncOnLoad();
 
   document.getElementById("btnClearCart").onclick = ()=>{
     if(cart.length===0) return;
@@ -2226,12 +2410,16 @@ function init(){
       document.getElementById("tabMenu").classList.toggle("hidden", tab.dataset.tab!=="menu");
       document.getElementById("tabCombo").classList.toggle("hidden", tab.dataset.tab!=="combo");
       document.getElementById("tabPromo").classList.toggle("hidden", tab.dataset.tab!=="promo");
+      document.getElementById("tabCloud").classList.toggle("hidden", tab.dataset.tab!=="cloud");
     };
   });
   document.getElementById("btnSaveGeneral").onclick = saveGeneralSettings;
   document.getElementById("inputQrFile").addEventListener("change", handleQrFile);
   document.getElementById("btnAddCategory").onclick = addCategory;
   document.getElementById("btnAddPromo").onclick = addPromo;
+  document.getElementById("btnGenShopId").onclick = ()=>{ document.getElementById("cloudShopIdInput").value = genShopId(); };
+  document.getElementById("btnCloudConnect").onclick = startCloudSync;
+  document.getElementById("btnCloudDisconnect").onclick = stopCloudSync;
   document.getElementById("btnAddCombo").onclick = ()=> openComboEditModal(null, null);
   document.getElementById("btnSaveCombo").onclick = saveCombo;
   document.getElementById("btnDeleteCombo").onclick = deleteCombo;
