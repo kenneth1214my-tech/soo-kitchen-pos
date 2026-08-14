@@ -37,15 +37,20 @@ const DEFAULT_STATE = {
   lastOrderDate:""
 };
 
+// JSON round-trip instead of structuredClone() — structuredClone was only added to Chrome in
+// 2022 (v98), so it's undefined on the older Android WebView/Chrome builds some cheap tablets
+// still ship with. DEFAULT_STATE is plain JSON-safe data, so this is a safe substitute.
+function deepClone(obj){ return JSON.parse(JSON.stringify(obj)); }
+
 function loadState(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    if(!raw) return structuredClone(DEFAULT_STATE);
+    if(!raw) return deepClone(DEFAULT_STATE);
     const parsed = JSON.parse(raw);
-    return Object.assign(structuredClone(DEFAULT_STATE), parsed, {
+    return Object.assign(deepClone(DEFAULT_STATE), parsed, {
       settings: Object.assign({}, DEFAULT_STATE.settings, parsed.settings||{})
     });
-  }catch(e){ return structuredClone(DEFAULT_STATE); }
+  }catch(e){ return deepClone(DEFAULT_STATE); }
 }
 function saveState(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 
@@ -1163,7 +1168,7 @@ function importBackup(file){
     catch(err){ alertToast("文件格式错误,无法导入"); return; }
     if(!payload || !payload.state || !payload.state.menu){ alertToast("文件内容不完整,无法导入"); return; }
     if(!confirm("导入备份会覆盖现有的菜单、设置与销售记录,确定要继续吗？")) return;
-    state = Object.assign(structuredClone(DEFAULT_STATE), payload.state, {
+    state = Object.assign(deepClone(DEFAULT_STATE), payload.state, {
       settings: Object.assign({}, DEFAULT_STATE.settings, payload.state.settings||{})
     });
     history = Array.isArray(payload.history) ? payload.history : [];
