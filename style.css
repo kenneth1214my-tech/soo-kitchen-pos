@@ -449,6 +449,13 @@ input{font-family:inherit;}
 .item-editor-row input[type=text]{flex:1;padding:8px;border:1px solid var(--border);border-radius:8px;}
 .item-editor-row input[type=number]{width:90px;padding:8px;border:1px solid var(--border);border-radius:8px;}
 .item-editor-row button{background:none;border:none;color:var(--danger);font-size:16px;padding:4px 6px;}
+.item-editor-row button[data-act="moveup"],.item-editor-row button[data-act="movedown"]{
+  color:var(--text-mute);font-size:13px;padding:6px 8px;
+  border:1px solid var(--border);border-radius:6px;background:var(--bg);
+}
+.item-editor-row button[data-act="moveup"]:disabled,.item-editor-row button[data-act="movedown"]:disabled{
+  opacity:.3;
+}
 .item-editor-row .avail-toggle{font-size:18px;background:none;border:none;padding:4px;color:inherit;}
 .add-item-btn{
   width:100%;padding:10px;margin-top:6px;border:1px dashed var(--border);

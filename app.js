@@ -1547,6 +1547,23 @@ function restoreFromTrash(trashId){
   alertToast("已恢复: " + (entry.data.name||""));
 }
 
+// Swaps item with its visual neighbor (skipping over combos, which aren't shown in this list)
+// among the *actual* cat.items array positions, so ordering here also reorders the customer-facing grid.
+function moveMenuItem(cat, item, direction){
+  const visibleItems = cat.items.filter(i=>!isCombo(i));
+  const visIdx = visibleItems.findIndex(i=>i.id===item.id);
+  const swapWith = visibleItems[visIdx+direction];
+  if(!swapWith) return;
+  const realIdxA = cat.items.findIndex(i=>i.id===item.id);
+  const realIdxB = cat.items.findIndex(i=>i.id===swapWith.id);
+  const tmp = cat.items[realIdxA];
+  cat.items[realIdxA] = cat.items[realIdxB];
+  cat.items[realIdxB] = tmp;
+  saveState();
+  renderMenuEditor();
+  renderItemGridIfNeeded();
+}
+
 function renderMenuEditor(){
   const container = document.getElementById("categoryEditorList");
   container.innerHTML = "";
@@ -1564,7 +1581,8 @@ function renderMenuEditor(){
     container.appendChild(box);
 
     const list = box.querySelector(`[data-list="${cat.id}"]`);
-    cat.items.filter(item=>!isCombo(item)).forEach(item=>{
+    const visibleItems = cat.items.filter(item=>!isCombo(item));
+    visibleItems.forEach((item, visIdx)=>{
       const row = document.createElement("div");
       row.className = "item-editor-row";
       const photoInner = item.image ? `<img src="${item.image}" alt="">` : `<span>📷</span>`;
@@ -1574,6 +1592,8 @@ function renderMenuEditor(){
         <div class="ie-fields">
           <div class="ie-line1">
             <input type="text" value="${escapeHtml(item.name)}" placeholder="菜品名称">
+            <button data-act="moveup" title="上移" ${visIdx===0?"disabled":""}>▲</button>
+            <button data-act="movedown" title="下移" ${visIdx===visibleItems.length-1?"disabled":""}>▼</button>
             <button data-act="delitem">🗑</button>
           </div>
           <div class="ie-line2">
@@ -1588,6 +1608,10 @@ function renderMenuEditor(){
       const priceInput = row.querySelector('input[type="number"]');
       const availBtn = row.querySelector(".avail-toggle");
       const delBtn = row.querySelector('[data-act="delitem"]');
+      const upBtn = row.querySelector('[data-act="moveup"]');
+      const downBtn = row.querySelector('[data-act="movedown"]');
+      upBtn.onclick = ()=> moveMenuItem(cat, item, -1);
+      downBtn.onclick = ()=> moveMenuItem(cat, item, 1);
 
       photoBtn.onclick = ()=> photoInput.click();
       photoInput.onchange = (e)=>{
