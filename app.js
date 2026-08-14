@@ -34,7 +34,8 @@ const DEFAULT_STATE = {
     ]}
   ],
   nextOrderSeq:1,
-  lastOrderDate:""
+  lastOrderDate:"",
+  lastModified:""
 };
 
 // JSON round-trip instead of structuredClone() — structuredClone was only added to Chrome in
@@ -52,7 +53,10 @@ function loadState(){
     });
   }catch(e){ return deepClone(DEFAULT_STATE); }
 }
-function saveState(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function saveState(){
+  state.lastModified = new Date().toISOString();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
 
 function loadHistory(){
   try{ return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; }
@@ -1167,7 +1171,10 @@ function importBackup(file){
     try{ payload = JSON.parse(e.target.result); }
     catch(err){ alertToast("文件格式错误,无法导入"); return; }
     if(!payload || !payload.state || !payload.state.menu){ alertToast("文件内容不完整,无法导入"); return; }
-    if(!confirm("导入备份会覆盖现有的菜单、设置与销售记录,确定要继续吗？")) return;
+    const fmtTime = iso => { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? d.toLocaleString("en-MY") : "未知时间"; };
+    const incomingTime = fmtTime(payload.state.lastModified || payload.exportedAt);
+    const localTime = fmtTime(state.lastModified);
+    if(!confirm(`即将导入的备份最后修改于:\n${incomingTime}\n\n本机现有数据最后修改于:\n${localTime}\n\n导入会完全覆盖本机的菜单、设置与销售记录,确定要继续吗？`)) return;
     state = Object.assign(deepClone(DEFAULT_STATE), payload.state, {
       settings: Object.assign({}, DEFAULT_STATE.settings, payload.state.settings||{})
     });
