@@ -35,7 +35,8 @@ const DEFAULT_STATE = {
   ],
   nextOrderSeq:1,
   lastOrderDate:"",
-  lastModified:""
+  lastModified:"",
+  recentlyDeleted:[]
 };
 
 // JSON round-trip instead of structuredClone() — structuredClone was only added to Chrome in
@@ -1092,7 +1093,9 @@ function renderPromoEditor(){
     typeSelect.onchange = ()=>{ promo.type = typeSelect.value; saveState(); };
     valueInput.onchange = ()=>{ promo.value = Math.max(0, parseFloat(valueInput.value)||0); valueInput.value = promo.value; saveState(); };
     row.querySelector('[data-act="delpromo"]').onclick = ()=>{
+      if(!confirm(`确定删除优惠「${promo.name}」?`)) return;
       state.settings.promotions = state.settings.promotions.filter(p=>p.id!==promo.id);
+      pushToTrash("promo", promo, {});
       saveState();
       renderPromoEditor();
     };
@@ -1183,7 +1186,7 @@ function importBackup(file){
     saveState(); saveHistory(); saveHeldOrders();
     activeCategory = state.menu[0] ? state.menu[0].id : null;
     document.getElementById("shopName").textContent = state.settings.shopName;
-    renderCategoryTabs(); renderItemGrid(); renderCart(); renderHeldBadge();
+    renderCategoryTabs(); renderItemGrid(); renderCart(); renderHeldBadge(); renderTrashBadge();
     populateSettingsForm();
     alertToast("备份已还原");
   };
@@ -1468,6 +1471,82 @@ function resizeImageFile(file, maxSize, quality, callback){
 // ---------- Menu editor ----------
 function uid(){ return "id" + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 
+// ---------- Recently-deleted trash / undo ----------
+// Menu items, categories, combos, and promotions all go through this before being permanently
+// gone, so a mis-tapped delete button (dense rows, small icons, no PIN re-check per action) is
+// always recoverable rather than a silent, permanent loss.
+const TRASH_LABELS = { item:"菜品", category:"分类", combo:"套餐", promo:"优惠" };
+
+function pushToTrash(type, data, meta){
+  if(!state.recentlyDeleted) state.recentlyDeleted = [];
+  state.recentlyDeleted.unshift({ id: uid(), type, data, meta: meta||{}, deletedAt: new Date().toISOString() });
+  if(state.recentlyDeleted.length > 30) state.recentlyDeleted = state.recentlyDeleted.slice(0,30);
+  renderTrashBadge();
+}
+
+function renderTrashBadge(){
+  const badge = document.getElementById("trashCountBadge");
+  if(!badge) return;
+  const n = (state.recentlyDeleted||[]).length;
+  badge.textContent = n;
+  badge.classList.toggle("hidden", n===0);
+}
+
+function openTrashModal(){
+  renderTrashList();
+  showModal("trashModal");
+}
+
+function renderTrashList(){
+  const list = document.getElementById("trashList");
+  const entries = state.recentlyDeleted||[];
+  if(entries.length===0){
+    list.innerHTML = `<div class="cart-empty">最近没有删除任何东西</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  entries.forEach(entry=>{
+    const row = document.createElement("div");
+    row.className = "trash-row";
+    const when = new Date(entry.deletedAt).toLocaleString("en-MY");
+    row.innerHTML = `
+      <div>
+        <div class="tr-name">${escapeHtml(entry.data.name||"")} <span class="combo-tag">${TRASH_LABELS[entry.type]||entry.type}</span></div>
+        <div class="tr-when">删除于 ${when}</div>
+      </div>
+      <button data-act="restore">恢复</button>
+    `;
+    row.querySelector('[data-act="restore"]').onclick = ()=> restoreFromTrash(entry.id);
+    list.appendChild(row);
+  });
+}
+
+function restoreFromTrash(trashId){
+  const entry = (state.recentlyDeleted||[]).find(e=>e.id===trashId);
+  if(!entry) return;
+  if(entry.type==="item" || entry.type==="combo"){
+    let cat = state.menu.find(c=>c.id===entry.meta.catId);
+    if(!cat) cat = state.menu[0];
+    if(!cat){ alertToast("没有可用的分类,请先新增一个分类再恢复"); return; }
+    cat.items.push(entry.data);
+  }else if(entry.type==="category"){
+    state.menu.push(entry.data);
+  }else if(entry.type==="promo"){
+    if(!state.settings.promotions) state.settings.promotions = [];
+    state.settings.promotions.push(entry.data);
+  }
+  state.recentlyDeleted = state.recentlyDeleted.filter(e=>e.id!==trashId);
+  saveState();
+  renderMenuEditor();
+  renderComboListEditor();
+  renderPromoEditor();
+  renderCategoryTabs();
+  renderItemGridIfNeeded();
+  renderTrashList();
+  renderTrashBadge();
+  alertToast("已恢复: " + (entry.data.name||""));
+}
+
 function renderMenuEditor(){
   const container = document.getElementById("categoryEditorList");
   container.innerHTML = "";
@@ -1526,7 +1605,9 @@ function renderMenuEditor(){
       nameInput.onchange = ()=>{ item.name = nameInput.value.trim()||item.name; saveState(); renderItemGridIfNeeded(); };
       priceInput.onchange = ()=>{ item.price = Math.max(0, parseFloat(priceInput.value)||0); priceInput.value = item.price; saveState(); renderItemGridIfNeeded(); };
       delBtn.onclick = ()=>{
+        if(!confirm(`确定删除「${item.name}」?`)) return;
         cat.items = cat.items.filter(i=>i.id!==item.id);
+        pushToTrash("item", item, { catId: cat.id });
         saveState(); renderMenuEditor(); renderItemGridIfNeeded();
       };
       list.appendChild(row);
@@ -1535,6 +1616,7 @@ function renderMenuEditor(){
     box.querySelector('[data-act="delcat"]').onclick = ()=>{
       if(!confirm(`确定删除分类「${cat.name}」及其所有菜品?`)) return;
       state.menu = state.menu.filter(c=>c.id!==cat.id);
+      pushToTrash("category", cat, {});
       if(activeCategory===cat.id){ activeCategory = state.menu[0]?state.menu[0].id:null; }
       saveState(); renderMenuEditor(); renderComboListEditor(); renderCategoryTabs(); renderItemGrid();
     };
@@ -1690,6 +1772,7 @@ function deleteCombo(){
   if(!confirm(`确定删除套餐「${comboEditItem.name}」?`)) return;
   const cat = state.menu.find(c=>c.id===comboEditOrigCatId);
   if(cat) cat.items = cat.items.filter(i=>i.id!==comboEditItem.id);
+  pushToTrash("combo", comboEditItem, { catId: comboEditOrigCatId });
   saveState();
   renderComboListEditor();
   renderMenuEditor();
@@ -1748,6 +1831,7 @@ function init(){
   renderItemGrid();
   renderCart();
   renderHeldBadge();
+  renderTrashBadge();
   tickClock();
   setInterval(tickClock, 15000);
 
@@ -1759,6 +1843,7 @@ function init(){
   document.getElementById("btnCartMobile").onclick = toggleMobileCart;
   document.getElementById("btnHoldOrder").onclick = holdCurrentOrder;
   document.getElementById("btnHeldOrders").onclick = openHeldOrdersModal;
+  document.getElementById("btnShowTrash").onclick = openTrashModal;
 
   document.getElementById("btnSaveNote").onclick = saveItemNote;
 

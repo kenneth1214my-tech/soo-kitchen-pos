@@ -213,6 +213,15 @@
   </div>
 </div>
 
+<!-- Recently Deleted / Trash Modal -->
+<div id="trashModal" class="modal hidden">
+  <div class="modal-box wide">
+    <div class="modal-header"><span>最近删除</span><button class="close-btn" data-close="trashModal">✕</button></div>
+    <p class="hint" style="text-align:left;">误删的菜品、分类、套餐、优惠都可以在这里恢复,最多保留最近 30 项。</p>
+    <div id="trashList" class="history-list"></div>
+  </div>
+</div>
+
 <!-- History Modal -->
 <div id="historyModal" class="modal hidden">
   <div class="modal-box wide">
@@ -225,7 +234,13 @@
 <!-- Settings Modal -->
 <div id="settingsModal" class="modal hidden">
   <div class="modal-box wide">
-    <div class="modal-header"><span>设置</span><button class="close-btn" data-close="settingsModal">✕</button></div>
+    <div class="modal-header">
+      <span>设置</span>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button id="btnShowTrash" class="icon-btn" style="background:var(--bg);color:var(--text);">🗑 最近删除 <span id="trashCountBadge" class="count-badge hidden">0</span></button>
+        <button class="close-btn" data-close="settingsModal">✕</button>
+      </div>
+    </div>
     <div id="pinGate">
       <p>请输入管理密码 (默认 0000)</p>
       <input type="password" inputmode="numeric" id="pinInput" maxlength="8" placeholder="PIN">
