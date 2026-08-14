@@ -1289,10 +1289,15 @@ function genShopId(){
   return out;
 }
 
-// Only the fields that are meant to be shared across devices — not orders/held/seq.
+// Only the fields that are meant to be shared across devices — not orders/held/seq. The PIN is
+// deliberately left out: this Firestore doc's only access control is knowing the shop ID, so
+// syncing the till-unlock PIN into it would leak the PIN to anyone who obtains that ID. The PIN
+// stays per-device instead — each till keeps whatever PIN was set on it locally.
 function cloudSyncableSnapshot(){
+  const settings = Object.assign({}, state.settings);
+  delete settings.pin;
   return {
-    settings: state.settings,
+    settings: settings,
     menu: state.menu,
     lastModified: state.lastModified
   };
@@ -1436,34 +1441,52 @@ function stopCloudSync(){
   cloudDb = null;
   cloudLastError = null;
   if(cloudPushTimer){ clearTimeout(cloudPushTimer); cloudPushTimer = null; }
+  if(cloudRetryTimer){ clearTimeout(cloudRetryTimer); cloudRetryTimer = null; }
   cloudPushInFlight = false;
   clearCloudConfig();
   renderCloudSyncStatus();
   alertToast("云端同步已断开");
 }
 
+let cloudRetryTimer = null;
+
 function scheduleCloudPush(){
   const cfg = loadCloudConfig();
   if(!cfg || !cfg.enabled) return;
+  if(cloudRetryTimer){ clearTimeout(cloudRetryTimer); cloudRetryTimer = null; }
   if(cloudPushTimer) clearTimeout(cloudPushTimer);
   cloudPushTimer = setTimeout(pushCloudState, 1200);
 }
 
 function pushCloudState(){
   cloudPushTimer = null;
+  if(cloudRetryTimer){ clearTimeout(cloudRetryTimer); cloudRetryTimer = null; }
   const cfg = loadCloudConfig();
-  if(!cfg || !cfg.enabled || !cloudDb) return;
+  if(!cfg || !cfg.enabled) return;
+  if(!cloudDb){
+    // Firestore isn't ready yet (still connecting) — try again shortly instead of dropping
+    // this edit silently until some unrelated later save happens to reschedule it.
+    cloudRetryTimer = setTimeout(pushCloudState, 5000);
+    return;
+  }
   cloudPushInFlight = true;
   cloudDocRef(cfg.shopId).set(cloudSyncableSnapshot(), {merge:true}).then(()=>{
     cloudPushInFlight = false;
     cloudLastError = null;
-    cfg.lastSyncedAt = new Date().toISOString();
-    saveCloudConfig(cfg);
+    // Re-read the config rather than reuse the `cfg` captured before this async write started —
+    // if the user disconnected while the write was in flight, this must not resurrect it.
+    const freshCfg = loadCloudConfig();
+    if(freshCfg && freshCfg.enabled){
+      freshCfg.lastSyncedAt = new Date().toISOString();
+      saveCloudConfig(freshCfg);
+    }
     renderCloudSyncStatus();
   }).catch(err=>{
     cloudPushInFlight = false;
     cloudLastError = (err && err.message) ? err.message : "推送失败";
     renderCloudSyncStatus();
+    // Transient network failures shouldn't strand an edit client-side forever.
+    cloudRetryTimer = setTimeout(pushCloudState, 15000);
   });
 }
 

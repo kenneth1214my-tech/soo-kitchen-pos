@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202608142333">
+<link rel="manifest" href="manifest.json?v=202608142334">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202608142333">
-<link rel="icon" href="icon-192.png?v=202608142333">
-<link rel="stylesheet" href="style.css?v=202608142333">
+<link rel="apple-touch-icon" href="icon-192.png?v=202608142334">
+<link rel="icon" href="icon-192.png?v=202608142334">
+<link rel="stylesheet" href="style.css?v=202608142334">
 </head>
 <body>
 
@@ -357,7 +357,8 @@
       </div>
 
       <div id="tabCloud" class="settings-panel hidden">
-        <p class="hint" style="text-align:left;">同步菜单、套餐、优惠、店铺设置到其他设备(不同步销售记录/挂单)。需要先在 Firebase 官网建一个免费项目,把项目配置贴在下面——两台设备都要贴同一份配置、填同一个店铺代号。</p>
+        <p class="hint" style="text-align:left;">同步菜单、套餐、优惠、店铺设置到其他设备(不同步销售记录/挂单/管理密码)。需要先在 Firebase 官网建一个免费项目,把项目配置贴在下面——两台设备都要贴同一份配置、填同一个店铺代号。</p>
+        <p class="hint" style="text-align:left;color:var(--danger);">⚠️ 请避免两台设备同时改动菜单/优惠 — 几乎同时改动时,较晚送达云端的一方会整个盖掉较早的一方,不会自动合并,也不会警告。建议同一时间只由一台设备编辑菜单。</p>
 
         <label>Firebase 项目配置 (从 Firebase 后台复制整段贴过来)</label>
         <textarea id="cloudConfigInput" rows="5" placeholder='{"apiKey":"...", "authDomain":"...", "projectId":"...", ...}' style="width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:13px;font-family:monospace;"></textarea>
@@ -380,6 +381,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202608142333" defer></script>
+<script src="app.js?v=202608142334" defer></script>
 </body>
 </html>
