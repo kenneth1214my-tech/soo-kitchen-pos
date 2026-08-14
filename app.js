@@ -15,7 +15,8 @@ const DEFAULT_STATE = {
     discountPinRequired:false,
     deviceLabel:"",
     paperWidth:"58",
-    autoPrintKitchen:true
+    autoPrintKitchen:true,
+    promotions:[]
   },
   menu:[
     { id:"cat1", name:"主食 Mains", items:[
@@ -100,6 +101,26 @@ function renderCategoryTabs(){
   });
 }
 
+function isCombo(item){
+  return !!(item.comboItems && item.comboItems.length>0);
+}
+// Resolves an item's comboItems (stored as {itemId,qty}) against the current menu, returning
+// {name, qty} pairs. A component that's since been deleted from the menu is skipped.
+function resolveComboContents(item){
+  if(!isCombo(item)) return [];
+  return item.comboItems.map(ci=>{
+    const found = findMenuItemById(ci.itemId);
+    return found ? { name: found.name, qty: ci.qty } : null;
+  }).filter(Boolean);
+}
+function findMenuItemById(id){
+  for(const cat of state.menu){
+    const found = cat.items.find(i=>i.id===id);
+    if(found) return found;
+  }
+  return null;
+}
+
 function renderItemGrid(){
   const grid = document.getElementById("itemGrid");
   grid.innerHTML = "";
@@ -112,14 +133,18 @@ function renderItemGrid(){
       ? `<img src="${item.image}" alt="">`
       : `<span class="photo-placeholder">🍽️</span>`;
     const toggleLabel = item.available===false ? "↺ 恢复上架" : "🚫";
+    const combo = isCombo(item);
+    const comboContents = combo ? resolveComboContents(item) : [];
     card.innerHTML = `
       <div class="item-photo">
         ${photoInner}
         ${item.available===false ? `<div class="badge">已售罄</div>` : ""}
+        ${combo ? `<span class="combo-corner">🍱 套餐</span>` : ""}
         <button class="item-quick-toggle" title="标记售罄/恢复">${toggleLabel}</button>
       </div>
       <div class="name">${escapeHtml(item.name)}</div>
       <div class="price">${fmt(item.price)}</div>
+      ${combo ? `<div class="combo-contents">含: ${comboContents.map(c=>escapeHtml(c.name)+(c.qty>1?"x"+c.qty:"")).join("、")}</div>` : ""}
     `;
     if(item.available!==false){
       card.onclick = ()=> addToCart(item);
@@ -163,7 +188,7 @@ function addToCart(item){
   if(blockIfSplitInProgress()) return;
   const existing = cart.find(c=>c.itemId===item.id);
   if(existing){ existing.qty++; }
-  else{ cart.push({ itemId:item.id, name:item.name, price:item.price, qty:1, note:"" }); }
+  else{ cart.push({ itemId:item.id, name:item.name, price:item.price, qty:1, note:"", comboContents: resolveComboContents(item) }); }
   renderCart();
 }
 function changeQty(itemId, delta){
@@ -207,8 +232,9 @@ function renderCart(){
       row.className = "cart-item";
       row.innerHTML = `
         <div class="ci-info">
-          <div class="ci-name">${escapeHtml(line.name)}</div>
+          <div class="ci-name">${escapeHtml(line.name)}${line.comboContents && line.comboContents.length ? ` <span class="combo-tag">套餐</span>` : ""}</div>
           <div class="ci-price">${fmt(line.price)} x ${line.qty} = ${fmt(line.price*line.qty)}</div>
+          ${line.comboContents && line.comboContents.length ? `<div class="combo-contents" style="padding:0;margin:2px 0;">含: ${line.comboContents.map(c=>escapeHtml(c.name)+(c.qty>1?"x"+c.qty:"")).join("、")}</div>` : ""}
           <div class="ci-note">
             ${line.note ? `<span class="ci-note-text">📝 ${escapeHtml(line.note)}</span>` : ""}
             <button class="ci-note-btn" data-act="note">${line.note ? "修改备注" : "+ 加备注"}</button>
@@ -236,7 +262,7 @@ function renderCart(){
   if(discount){
     rowDiscount.classList.remove("hidden");
     rowDiscountAdd.classList.add("hidden");
-    const label = discount.type==="percent" ? `折扣 (${discount.value}%)` : "折扣";
+    const label = discount.name ? `折扣 (${escapeHtml(discount.name)})` : (discount.type==="percent" ? `折扣 (${discount.value}%)` : "折扣");
     rowDiscount.querySelector("span:first-child").innerHTML = `${label} <button id="btnRemoveDiscount" class="mini-x">✕</button>`;
     document.getElementById("btnRemoveDiscount").onclick = removeDiscount;
     document.getElementById("discountVal").textContent = "-" + fmt(discountAmount());
@@ -358,8 +384,10 @@ function openDiscountModal(){
   document.getElementById("discountPinError").classList.add("hidden");
   document.getElementById("discountInput").value = discount ? String(discount.value) : "";
   discountType = discount ? discount.type : "percent";
+  pendingPromoName = discount ? discount.name || null : null;
   document.querySelectorAll("#discountModal .pay-tab").forEach(b=>b.classList.toggle("active", b.dataset.dtype===discountType));
   buildDiscountQuick();
+  buildPromoPresets();
   updateDiscountPreview();
   if(state.settings.discountPinRequired){
     document.getElementById("discountPinGate").classList.remove("hidden");
@@ -371,6 +399,33 @@ function openDiscountModal(){
   showModal("discountModal");
 }
 
+let pendingPromoName = null;
+
+function buildPromoPresets(){
+  const wrap = document.getElementById("promoPresetWrap");
+  const box = document.getElementById("promoPresets");
+  const promos = state.settings.promotions || [];
+  if(promos.length===0){
+    wrap.classList.add("hidden");
+    return;
+  }
+  wrap.classList.remove("hidden");
+  box.innerHTML = "";
+  promos.forEach(p=>{
+    const btn = document.createElement("button");
+    btn.textContent = p.type==="percent" ? `${p.name} (${p.value}%)` : `${p.name} (-RM${p.value})`;
+    btn.onclick = ()=>{
+      discountType = p.type;
+      pendingPromoName = p.name;
+      document.querySelectorAll("#discountModal .pay-tab").forEach(b=>b.classList.toggle("active", b.dataset.dtype===discountType));
+      buildDiscountQuick();
+      document.getElementById("discountInput").value = p.value;
+      updateDiscountPreview();
+    };
+    box.appendChild(btn);
+  });
+}
+
 function buildDiscountQuick(){
   const box = document.getElementById("discountQuick");
   box.innerHTML = "";
@@ -378,7 +433,7 @@ function buildDiscountQuick(){
   opts.forEach(v=>{
     const btn = document.createElement("button");
     btn.textContent = discountType==="percent" ? v+"%" : "RM"+v;
-    btn.onclick = ()=>{ document.getElementById("discountInput").value = v; updateDiscountPreview(); };
+    btn.onclick = ()=>{ pendingPromoName = null; document.getElementById("discountInput").value = v; updateDiscountPreview(); };
     box.appendChild(btn);
   });
 }
@@ -396,7 +451,7 @@ function updateDiscountPreview(){
 function applyDiscount(){
   const val = parseFloat(document.getElementById("discountInput").value) || 0;
   if(val<=0){ removeDiscount(); hideModal("discountModal"); return; }
-  discount = { type:discountType, value:val };
+  discount = { type:discountType, value:val, name: pendingPromoName || null };
   renderCart();
   hideModal("discountModal");
 }
@@ -451,9 +506,10 @@ let splitGroups = null; // array of {label, lines:[{itemId,name,price,qty}], sub
 function buildFullCartCtx(){
   return {
     label: null,
-    items: cart.map(c=>({name:c.name, price:c.price, qty:c.qty, note:c.note||""})),
+    items: cart.map(c=>({name:c.name, price:c.price, qty:c.qty, note:c.note||"", comboContents:c.comboContents||[]})),
     subtotal: cartSubtotal(),
     discountShare: discountAmount(),
+    discountName: discount ? discount.name : null,
     tax: cartTax(),
     taxRate: state.settings.taxEnabled ? state.settings.taxRate : 0,
     total: cartTotal()
@@ -543,6 +599,7 @@ function finalizeOrder(paymentMethod, extra){
     items: ctx.items,
     subtotal: ctx.subtotal,
     discount: ctx.discountShare,
+    discountName: ctx.discountName || null,
     tax: ctx.tax,
     taxRate: ctx.taxRate,
     total: finalTotal,
@@ -587,10 +644,14 @@ function maybeAutoPrintKitchen(orderNo, items){
 function showReceipt(order, returnToSplitList){
   const el = document.getElementById("receiptContent");
   const isEqualSplit = order.isSplit && order.splitKind==="equal";
+  const comboLine = it => it.comboContents && it.comboContents.length
+    ? `<div class="r-line" style="padding:0 0 4px 12px;"><span style="font-size:12px;color:var(--text-mute);">含: ${it.comboContents.map(c=>escapeHtml(c.name)+(c.qty>1?"x"+c.qty:"")).join("、")}</span></div>`
+    : "";
   const itemsBlock = isEqualSplit
     ? `<p class="hint" style="text-align:left;margin:0 0 8px;">均分账单 · 整单内容: ${order.items.map(it=>escapeHtml(it.name)+" x"+it.qty).join("、")}</p><hr>`
     : `${order.items.map(it=>`
         <div class="r-line"><span>${escapeHtml(it.name)} x${it.qty}${it.note?` <i style="color:var(--brand);font-style:normal;">(${escapeHtml(it.note)})</i>`:""}</span><span>${fmt(it.price*it.qty)}</span></div>
+        ${comboLine(it)}
       `).join("")}<hr>`;
   el.innerHTML = `
     <div class="r-shop">${escapeHtml(state.settings.shopName)}</div>
@@ -598,7 +659,7 @@ function showReceipt(order, returnToSplitList){
     <hr>
     ${itemsBlock}
     <div class="r-line"><span>${isEqualSplit ? "本账单应付 (均分)" : "小计"}</span><span>${fmt(order.subtotal)}</span></div>
-    ${order.discount>0?`<div class="r-line"><span>折扣</span><span>-${fmt(order.discount)}</span></div>`:""}
+    ${order.discount>0?`<div class="r-line"><span>折扣${order.discountName?` (${escapeHtml(order.discountName)})`:""}</span><span>-${fmt(order.discount)}</span></div>`:""}
     ${order.tax>0?`<div class="r-line"><span>服务税 (${order.taxRate}%)</span><span>${fmt(order.tax)}</span></div>`:""}
     ${order.roundingAdj?`<div class="r-line"><span>现金四舍五入</span><span>${order.roundingAdj>0?"+"+fmt(order.roundingAdj):"-"+fmt(Math.abs(order.roundingAdj))}</span></div>`:""}
     <div class="r-line r-total"><span>总计</span><span>${fmt(order.total)}</span></div>
@@ -776,7 +837,7 @@ function buildSplitUnits(){
   splitUnits = [];
   cart.forEach(line=>{
     for(let i=0;i<line.qty;i++){
-      splitUnits.push({ unitKey: line.itemId+"_"+i, itemId: line.itemId, name: line.name, price: line.price, note: line.note||"" });
+      splitUnits.push({ unitKey: line.itemId+"_"+i, itemId: line.itemId, name: line.name, price: line.price, note: line.note||"", comboContents: line.comboContents||[] });
     }
   });
   splitUnitAssign = {};
@@ -852,9 +913,10 @@ function confirmSplit(){
       const subtotal = round2(discSub + discountShare);
       return {
         label: String(i+1),
-        items: cart.map(c=>({name:c.name, price:c.price, qty:c.qty, note:c.note||""})),
+        items: cart.map(c=>({name:c.name, price:c.price, qty:c.qty, note:c.note||"", comboContents:c.comboContents||[]})),
         subtotal,
         discountShare,
+        discountName: discount ? discount.name : null,
         tax,
         total,
         splitKind:"equal"
@@ -879,7 +941,7 @@ function confirmSplit(){
       // aggregate units back into item lines for the receipt
       const linesMap = {};
       unitsInGroup.forEach(u=>{
-        if(!linesMap[u.itemId]) linesMap[u.itemId] = {name:u.name, price:u.price, qty:0, note:u.note||""};
+        if(!linesMap[u.itemId]) linesMap[u.itemId] = {name:u.name, price:u.price, qty:0, note:u.note||"", comboContents:u.comboContents||[]};
         linesMap[u.itemId].qty++;
       });
       return {
@@ -887,6 +949,7 @@ function confirmSplit(){
         items: Object.values(linesMap),
         subtotal: groupSub,
         discountShare: groupDiscountShare,
+        discountName: discount ? discount.name : null,
         tax,
         total: round2(discSub+tax),
         splitKind:"items"
@@ -936,6 +999,7 @@ function renderSplitPayList(){
           items: g.items,
           subtotal: g.subtotal,
           discountShare: g.discountShare,
+          discountName: g.discountName,
           tax: g.tax,
           taxRate: state.settings.taxEnabled ? state.settings.taxRate : 0,
           total: g.total,
@@ -992,6 +1056,45 @@ function populateSettingsForm(){
     preview.classList.add("hidden");
   }
   renderMenuEditor();
+  renderPromoEditor();
+}
+
+function renderPromoEditor(){
+  const list = document.getElementById("promoEditorList");
+  list.innerHTML = "";
+  (state.settings.promotions||[]).forEach(promo=>{
+    const row = document.createElement("div");
+    row.className = "promo-editor-row";
+    row.innerHTML = `
+      <input type="text" value="${escapeHtml(promo.name)}" placeholder="优惠名称,例如：会员9折">
+      <select>
+        <option value="percent">%</option>
+        <option value="amount">RM</option>
+      </select>
+      <input type="number" step="0.1" min="0" value="${promo.value}">
+      <button data-act="delpromo">🗑</button>
+    `;
+    const nameInput = row.querySelector('input[type="text"]');
+    const typeSelect = row.querySelector("select");
+    const valueInput = row.querySelector('input[type="number"]');
+    typeSelect.value = promo.type;
+    nameInput.onchange = ()=>{ promo.name = nameInput.value.trim()||promo.name; saveState(); };
+    typeSelect.onchange = ()=>{ promo.type = typeSelect.value; saveState(); };
+    valueInput.onchange = ()=>{ promo.value = Math.max(0, parseFloat(valueInput.value)||0); valueInput.value = promo.value; saveState(); };
+    row.querySelector('[data-act="delpromo"]').onclick = ()=>{
+      state.settings.promotions = state.settings.promotions.filter(p=>p.id!==promo.id);
+      saveState();
+      renderPromoEditor();
+    };
+    list.appendChild(row);
+  });
+}
+
+function addPromo(){
+  if(!state.settings.promotions) state.settings.promotions = [];
+  state.settings.promotions.push({ id: uid(), name: "新优惠", type: "percent", value: 10 });
+  saveState();
+  renderPromoEditor();
 }
 
 function saveGeneralSettings(){
@@ -1293,10 +1396,13 @@ function receiptToPrintBlocks(order){
   order.items.forEach(it=>{
     blocks.push({ text: `${it.name} x${it.qty}${it.note?" ("+it.note+")":""}` });
     blocks.push({ text: `  ${fmt(it.price*it.qty)}`, align:"right" });
+    if(it.comboContents && it.comboContents.length){
+      blocks.push({ text: `  含: ${it.comboContents.map(c=>c.name+(c.qty>1?"x"+c.qty:"")).join("、")}`, size:"sm" });
+    }
   });
   blocks.push({ text: "--------------------------------", spacingAfter:4 });
   blocks.push({ text: `小计  ${fmt(order.subtotal)}`, align:"right" });
-  if(order.discount>0) blocks.push({ text: `折扣  -${fmt(order.discount)}`, align:"right" });
+  if(order.discount>0) blocks.push({ text: `折扣${order.discountName?" ("+order.discountName+")":""}  -${fmt(order.discount)}`, align:"right" });
   if(order.tax>0) blocks.push({ text: `服务税  ${fmt(order.tax)}`, align:"right" });
   if(order.roundingAdj) blocks.push({ text: `四舍五入  ${order.roundingAdj>0?"+":"-"}${fmt(Math.abs(order.roundingAdj))}`, align:"right" });
   blocks.push({ text: `总计  ${fmt(order.total)}`, bold:true, size:"lg", align:"right", spacingAfter:6 });
@@ -1315,6 +1421,11 @@ function kitchenTicketToPrintBlocks(order){
   order.items.forEach(it=>{
     blocks.push({ text: `${it.name}  x${it.qty}`, size:"lg", bold:true });
     if(it.note) blocks.push({ text: `>> ${it.note}`, bold:true });
+    if(it.comboContents && it.comboContents.length){
+      it.comboContents.forEach(c=>{
+        blocks.push({ text: `  - ${c.name} x${c.qty*it.qty}` });
+      });
+    }
   });
   blocks.push({ text: "" , spacingAfter:6});
   return blocks;
@@ -1376,6 +1487,7 @@ function renderMenuEditor(){
           <div class="ie-line2">
             <button class="avail-toggle" title="上架/售罄">${item.available===false?"🚫":"✅"}</button>
             <input type="number" step="0.10" min="0" value="${item.price}" placeholder="价格">
+            <button data-act="combo" title="设置套餐内容">🍱${isCombo(item)?"<span class=\"combo-tag\">套餐</span>":""}</button>
           </div>
         </div>
       `;
@@ -1385,6 +1497,8 @@ function renderMenuEditor(){
       const priceInput = row.querySelector('input[type="number"]');
       const availBtn = row.querySelector(".avail-toggle");
       const delBtn = row.querySelector('[data-act="delitem"]');
+      const comboBtn = row.querySelector('[data-act="combo"]');
+      comboBtn.onclick = ()=> openComboEditModal(item);
 
       photoBtn.onclick = ()=> photoInput.click();
       photoInput.onchange = (e)=>{
@@ -1423,6 +1537,77 @@ function renderMenuEditor(){
       saveState(); renderMenuEditor(); renderCategoryTabs();
     };
   });
+}
+
+// ---------- Combo (set meal) editor ----------
+let comboEditItem = null;
+let comboEditDraft = {}; // itemId -> qty
+
+function openComboEditModal(item){
+  comboEditItem = item;
+  comboEditDraft = {};
+  (item.comboItems||[]).forEach(ci=>{ comboEditDraft[ci.itemId] = ci.qty; });
+  document.getElementById("comboEditTitle").textContent = `${item.name} · 套餐内容`;
+  renderComboEditList();
+  showModal("comboEditModal");
+}
+
+function renderComboEditList(){
+  const list = document.getElementById("comboEditList");
+  list.innerHTML = "";
+  state.menu.forEach(cat=>{
+    const eligible = cat.items.filter(i=>i.id!==comboEditItem.id);
+    if(eligible.length===0) return;
+    const label = document.createElement("div");
+    label.className = "combo-cat-label";
+    label.textContent = cat.name;
+    list.appendChild(label);
+    eligible.forEach(i=>{
+      const qty = comboEditDraft[i.id] || 0;
+      const row = document.createElement("div");
+      row.className = "combo-item-row";
+      row.innerHTML = `
+        <div>
+          <div class="ci-label">${escapeHtml(i.name)}</div>
+          <div class="ci-price">${fmt(i.price)}</div>
+        </div>
+        <div class="combo-qty-stepper">
+          <button data-act="minus">−</button>
+          <span>${qty}</span>
+          <button data-act="plus">+</button>
+        </div>
+      `;
+      row.querySelector('[data-act="minus"]').onclick = ()=>{
+        comboEditDraft[i.id] = Math.max(0, (comboEditDraft[i.id]||0)-1);
+        renderComboEditList();
+      };
+      row.querySelector('[data-act="plus"]').onclick = ()=>{
+        comboEditDraft[i.id] = (comboEditDraft[i.id]||0)+1;
+        renderComboEditList();
+      };
+      list.appendChild(row);
+    });
+  });
+}
+
+function saveCombo(){
+  comboEditItem.comboItems = Object.keys(comboEditDraft)
+    .filter(id=>comboEditDraft[id]>0)
+    .map(id=>({itemId:id, qty:comboEditDraft[id]}));
+  saveState();
+  renderMenuEditor();
+  renderItemGridIfNeeded();
+  hideModal("comboEditModal");
+  alertToast(comboEditItem.comboItems.length ? "套餐已保存" : "已变回单点菜品");
+}
+
+function clearCombo(){
+  comboEditItem.comboItems = [];
+  saveState();
+  renderMenuEditor();
+  renderItemGridIfNeeded();
+  hideModal("comboEditModal");
+  alertToast("已变回单点菜品");
 }
 
 function renderItemGridIfNeeded(){
@@ -1558,11 +1743,15 @@ function init(){
       document.querySelectorAll(".settings-tab").forEach(t=>t.classList.toggle("active", t===tab));
       document.getElementById("tabGeneral").classList.toggle("hidden", tab.dataset.tab!=="general");
       document.getElementById("tabMenu").classList.toggle("hidden", tab.dataset.tab!=="menu");
+      document.getElementById("tabPromo").classList.toggle("hidden", tab.dataset.tab!=="promo");
     };
   });
   document.getElementById("btnSaveGeneral").onclick = saveGeneralSettings;
   document.getElementById("inputQrFile").addEventListener("change", handleQrFile);
   document.getElementById("btnAddCategory").onclick = addCategory;
+  document.getElementById("btnAddPromo").onclick = addPromo;
+  document.getElementById("btnSaveCombo").onclick = saveCombo;
+  document.getElementById("btnClearCombo").onclick = clearCombo;
   document.getElementById("btnClearHistory").onclick = ()=>{
     if(confirm("确定清空今天的所有订单记录?此操作无法撤销。")){
       const t = todayStr();
@@ -1578,12 +1767,13 @@ function init(){
   document.querySelectorAll("#discountModal .pay-tab").forEach(btn=>{
     btn.onclick = ()=>{
       discountType = btn.dataset.dtype;
+      pendingPromoName = null;
       document.querySelectorAll("#discountModal .pay-tab").forEach(b=>b.classList.toggle("active", b===btn));
       buildDiscountQuick();
       updateDiscountPreview();
     };
   });
-  document.getElementById("discountInput").addEventListener("input", updateDiscountPreview);
+  document.getElementById("discountInput").addEventListener("input", ()=>{ pendingPromoName = null; updateDiscountPreview(); });
   document.getElementById("btnApplyDiscount").onclick = applyDiscount;
   document.getElementById("btnDiscountPinSubmit").onclick = ()=>{
     const val = document.getElementById("discountPinInput").value;

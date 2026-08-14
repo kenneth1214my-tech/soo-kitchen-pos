@@ -343,6 +343,41 @@ input{font-family:inherit;}
 .split-pay-row .sp-paid{color:var(--success);font-weight:700;font-size:13px;}
 .split-pay-row button{padding:10px 16px;border-radius:10px;border:none;background:var(--brand);color:#fff;font-weight:700;}
 
+/* Combo editor */
+.combo-edit-list{padding:0 18px;max-height:50vh;overflow-y:auto;}
+.combo-cat-label{font-weight:800;font-size:13px;color:var(--text-mute);margin:14px 0 6px;}
+.combo-item-row{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:10px 0;border-bottom:1px dashed var(--border);
+}
+.combo-item-row .ci-label{font-weight:600;font-size:14px;}
+.combo-item-row .ci-price{font-size:12px;color:var(--text-mute);}
+.combo-qty-stepper{display:flex;align-items:center;gap:8px;}
+.combo-qty-stepper button{
+  width:30px;height:30px;border-radius:8px;border:1px solid var(--border);
+  background:#f4f1ec;font-size:16px;font-weight:700;
+}
+.combo-qty-stepper span{min-width:16px;text-align:center;font-weight:700;}
+.item-card .combo-tag, .ie-fields .combo-tag{
+  display:inline-block;font-size:10px;font-weight:800;color:#fff;
+  background:var(--brand);border-radius:6px;padding:1px 6px;margin-left:4px;vertical-align:middle;
+}
+.item-photo .combo-corner{
+  position:absolute;bottom:6px;left:6px;font-size:11px;font-weight:800;color:#fff;
+  background:rgba(43,33,24,.65);border-radius:8px;padding:2px 7px;
+}
+.item-card .combo-contents{font-size:11px;color:var(--text-mute);padding:0 8px;margin-top:-2px;}
+
+/* Promotions */
+.promo-presets button{background:#fff4ea;border-color:var(--brand);color:var(--brand-dark);}
+.promo-editor-row{
+  display:flex;gap:6px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--border);
+}
+.promo-editor-row input[type=text]{flex:1.4;padding:8px;border:1px solid var(--border);border-radius:8px;}
+.promo-editor-row select{padding:8px;border:1px solid var(--border);border-radius:8px;}
+.promo-editor-row input[type=number]{width:80px;padding:8px;border:1px solid var(--border);border-radius:8px;}
+.promo-editor-row button{background:none;border:none;color:var(--danger);font-size:16px;padding:4px 6px;}
+
 /* Settings */
 #pinGate{padding:20px;text-align:center;}
 #pinInput{
