@@ -726,20 +726,42 @@ function requestPinConfirm(title, callback){
 }
 
 // ---------- History ----------
-function openHistory(){
-  const t = todayStr();
-  const todays = history.filter(o=>o.date===t);
+// The order list itself stays visible to staff without a PIN (needed to confirm a specific order
+// went through, or to void/reopen — each of those already has its own PIN check). Only the
+// aggregate revenue summary is gated, since owners often don't want staff seeing total sales at a
+// glance; it re-locks every time the history modal is (re)opened rather than staying unlocked for
+// the rest of the session.
+let historyStatsUnlocked = false;
+
+function renderHistoryStats(todays){
+  const box = document.getElementById("historySummary");
+  if(!historyStatsUnlocked){
+    box.innerHTML = `<button id="btnUnlockStats" class="secondary-btn" style="flex:1;">🔒 需要密码查看营业额统计</button>`;
+    document.getElementById("btnUnlockStats").onclick = ()=>{
+      requestPinConfirm("查看营业额统计", ()=>{
+        historyStatsUnlocked = true;
+        renderHistoryStats(todays);
+      });
+    };
+    return;
+  }
   const valid = todays.filter(o=>!o.voided);
   const totalSales = valid.reduce((s,o)=>s+o.total,0);
   const cashSales = valid.filter(o=>o.paymentMethod==="cash").reduce((s,o)=>s+o.total,0);
   const qrSales = valid.filter(o=>o.paymentMethod==="qr").reduce((s,o)=>s+o.total,0);
-
-  document.getElementById("historySummary").innerHTML = `
+  box.innerHTML = `
     <div class="stat">订单数<b>${valid.length}</b></div>
     <div class="stat">总营业额<b>${fmt(totalSales)}</b></div>
     <div class="stat">现金<b>${fmt(cashSales)}</b></div>
     <div class="stat">电子钱包<b>${fmt(qrSales)}</b></div>
   `;
+}
+
+function openHistory(){
+  const t = todayStr();
+  const todays = history.filter(o=>o.date===t);
+  historyStatsUnlocked = false;
+  renderHistoryStats(todays);
 
   const list = document.getElementById("historyList");
   if(todays.length===0){
