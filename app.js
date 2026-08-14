@@ -1564,6 +1564,65 @@ function moveMenuItem(cat, item, direction){
   renderItemGridIfNeeded();
 }
 
+// Drag-to-reorder via Pointer Events (not native HTML5 drag/drop, which Android Chrome doesn't
+// fire from touch) — the row follows the finger/pointer visually, and on release we work out how
+// many row-heights it moved and reorder from there, rather than doing a live per-frame DOM swap
+// (simpler and more robust on the low-end/older tablets this app also has to run on).
+let dragCtx = null;
+
+function attachDragHandle(handle, row, cat, item){
+  handle.style.touchAction = "none";
+  handle.addEventListener("pointerdown", (e)=>{
+    e.preventDefault();
+    const listEl = row.parentElement;
+    const rows = Array.from(listEl.children);
+    dragCtx = {
+      cat, item, row,
+      startY: e.clientY,
+      origIndex: rows.indexOf(row),
+      rowHeight: row.getBoundingClientRect().height || 60,
+      count: rows.length
+    };
+    row.classList.add("dragging-row");
+    try{ handle.setPointerCapture(e.pointerId); }catch(err){ /* not fatal */ }
+  });
+  handle.addEventListener("pointermove", (e)=>{
+    if(!dragCtx || dragCtx.row!==row) return;
+    const dy = e.clientY - dragCtx.startY;
+    row.style.transform = `translateY(${dy}px)`;
+  });
+  const endDrag = (e)=>{
+    if(!dragCtx || dragCtx.row!==row) return;
+    const dy = e.clientY - dragCtx.startY;
+    row.style.transform = "";
+    row.classList.remove("dragging-row");
+    const shift = Math.round(dy / dragCtx.rowHeight);
+    let targetIdx = dragCtx.origIndex + shift;
+    targetIdx = Math.max(0, Math.min(dragCtx.count-1, targetIdx));
+    const fromIdx = dragCtx.origIndex;
+    dragCtx = null;
+    if(targetIdx !== fromIdx) reorderMenuItem(cat, item, targetIdx);
+  };
+  handle.addEventListener("pointerup", endDrag);
+  handle.addEventListener("pointercancel", endDrag);
+}
+
+// Moves `item` to `targetVisIdx` among its category's non-combo items, keeping any combo items
+// in their original slots (rebuilt by walking cat.items and refilling each non-combo slot from
+// the newly-ordered visible-items queue) so dragging dishes doesn't scramble combo positions.
+function reorderMenuItem(cat, item, targetVisIdx){
+  const visibleItems = cat.items.filter(i=>!isCombo(i));
+  const fromIdx = visibleItems.findIndex(i=>i.id===item.id);
+  if(fromIdx<0 || fromIdx===targetVisIdx) return;
+  visibleItems.splice(fromIdx,1);
+  visibleItems.splice(targetVisIdx,0,item);
+  let vi = 0;
+  cat.items = cat.items.map(i=> isCombo(i) ? i : visibleItems[vi++]);
+  saveState();
+  renderMenuEditor();
+  renderItemGridIfNeeded();
+}
+
 function renderMenuEditor(){
   const container = document.getElementById("categoryEditorList");
   container.innerHTML = "";
@@ -1587,6 +1646,7 @@ function renderMenuEditor(){
       row.className = "item-editor-row";
       const photoInner = item.image ? `<img src="${item.image}" alt="">` : `<span>📷</span>`;
       row.innerHTML = `
+        <div class="ie-drag-handle" title="按住拖拉排序">⠿</div>
         <div class="ie-photo">${photoInner}</div>
         <input type="file" accept="image/*" class="ie-photo-input hidden">
         <div class="ie-fields">
@@ -1612,6 +1672,7 @@ function renderMenuEditor(){
       const downBtn = row.querySelector('[data-act="movedown"]');
       upBtn.onclick = ()=> moveMenuItem(cat, item, -1);
       downBtn.onclick = ()=> moveMenuItem(cat, item, 1);
+      attachDragHandle(row.querySelector(".ie-drag-handle"), row, cat, item);
 
       photoBtn.onclick = ()=> photoInput.click();
       photoInput.onchange = (e)=>{

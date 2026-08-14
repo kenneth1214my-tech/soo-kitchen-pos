@@ -437,6 +437,15 @@ input{font-family:inherit;}
 .item-editor-list{padding:8px 12px;}
 .item-editor-row{
   display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--border);
+  position:relative;background:var(--panel);
+}
+.ie-drag-handle{
+  font-size:20px;color:var(--text-mute);padding:8px 2px;
+  cursor:grab;flex-shrink:0;line-height:1;user-select:none;
+}
+.item-editor-row.dragging-row{
+  opacity:.9;box-shadow:0 6px 16px rgba(0,0,0,.25);z-index:20;
+  border-radius:10px;
 }
 .ie-photo{
   width:52px;height:52px;flex-shrink:0;border-radius:10px;overflow:hidden;
