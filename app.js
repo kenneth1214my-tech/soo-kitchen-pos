@@ -135,6 +135,16 @@ function comboContentsLabel(comboContents, lineQty){
   }).join("、");
 }
 
+function findCombosUsingItem(itemId){
+  const names = [];
+  state.menu.forEach(cat=>{
+    cat.items.forEach(i=>{
+      if(isCombo(i) && i.comboItems.some(ci=>ci.itemId===itemId)) names.push(i.name);
+    });
+  });
+  return names;
+}
+
 function findMenuItemById(id){
   for(const cat of state.menu){
     const found = cat.items.find(i=>i.id===id);
@@ -793,7 +803,11 @@ function reopenOrder(orderNo){
     if(!confirm(`确定把订单 ${orderNo} 的内容重新放入购物车吗?${warnExtra}`)) return;
     cart = ord.items.map(it=>{
       const menuItem = findMenuItemByName(it.name);
-      return { itemId: menuItem ? menuItem.id : "reopen_"+it.name, name: it.name, price: it.price, qty: it.qty, note: it.note||"", comboContents: it.comboContents||[] };
+      // When a live menu item is matched, price it at the item's CURRENT price rather than the
+      // historical price on the old order. addToCart merges new taps of the same dish into this
+      // line by itemId alone (it doesn't re-check price), so if we kept the historical price here
+      // any units added afterward via the menu grid would silently inherit the stale price too.
+      return { itemId: menuItem ? menuItem.id : "reopen_"+it.name, name: it.name, price: menuItem ? menuItem.price : it.price, qty: it.qty, note: it.note||"", comboContents: it.comboContents||[] };
     });
     resetOrderState();
     renderCart();
@@ -1554,9 +1568,10 @@ function renderTrashList(){
 function restoreFromTrash(trashId){
   const entry = (state.recentlyDeleted||[]).find(e=>e.id===trashId);
   if(!entry) return;
+  let landedInCatName = null;
   if(entry.type==="item" || entry.type==="combo"){
     let cat = state.menu.find(c=>c.id===entry.meta.catId);
-    if(!cat) cat = state.menu[0];
+    if(!cat){ cat = state.menu[0]; landedInCatName = cat && cat.name; }
     if(!cat){ alertToast("没有可用的分类,请先新增一个分类再恢复"); return; }
     cat.items.push(entry.data);
   }else if(entry.type==="category"){
@@ -1574,7 +1589,11 @@ function restoreFromTrash(trashId){
   renderItemGridIfNeeded();
   renderTrashList();
   renderTrashBadge();
-  alertToast("已恢复: " + (entry.data.name||""));
+  if(landedInCatName){
+    alertToast(`已恢复: ${entry.data.name||""}(原分类已不存在,放入了「${landedInCatName}」)`);
+  }else{
+    alertToast("已恢复: " + (entry.data.name||""));
+  }
 }
 
 // Swaps item with its visual neighbor (skipping over combos, which aren't shown in this list)
@@ -1600,41 +1619,56 @@ function moveMenuItem(cat, item, direction){
 // (simpler and more robust on the low-end/older tablets this app also has to run on).
 let dragCtx = null;
 
+function cleanupDragVisual(){
+  if(!dragCtx) return;
+  dragCtx.row.style.transform = "";
+  dragCtx.row.classList.remove("dragging-row");
+}
+
+function finalizeDrag(){
+  if(!dragCtx) return;
+  const { cat, item, origIndex, rowHeight, count, startY, lastY } = dragCtx;
+  cleanupDragVisual();
+  const shift = Math.round((lastY-startY) / rowHeight);
+  const targetIdx = Math.max(0, Math.min(count-1, origIndex+shift));
+  dragCtx = null;
+  if(targetIdx !== origIndex) reorderMenuItem(cat, item, targetIdx);
+}
+
+// Finalizing on document (matched by pointerId) rather than only on the row's own handle means a
+// drag still ends cleanly even if the handle-specific pointerup/pointercancel never fires — e.g.
+// setPointerCapture failing on an older Android build, or the finger lifting off after sliding
+// past the handle. Without this, a failed capture could leave a row permanently stuck mid-drag.
+document.addEventListener("pointerup", (e)=>{ if(dragCtx && e.pointerId===dragCtx.pointerId) finalizeDrag(); });
+document.addEventListener("pointercancel", (e)=>{ if(dragCtx && e.pointerId===dragCtx.pointerId) finalizeDrag(); });
+
 function attachDragHandle(handle, row, cat, item){
   handle.style.touchAction = "none";
   handle.addEventListener("pointerdown", (e)=>{
     e.preventDefault();
+    // A previous drag could still be "active" here if its own pointerup/pointercancel never
+    // fired (the exact failure mode the document-level fallback above exists for, but belt and
+    // braces) — clear it before starting a new one so nothing is ever left permanently stuck.
+    if(dragCtx) cleanupDragVisual();
     const listEl = row.parentElement;
     const rows = Array.from(listEl.children);
     dragCtx = {
       cat, item, row,
+      pointerId: e.pointerId,
       startY: e.clientY,
+      lastY: e.clientY,
       origIndex: rows.indexOf(row),
       rowHeight: row.getBoundingClientRect().height || 60,
       count: rows.length
     };
     row.classList.add("dragging-row");
-    try{ handle.setPointerCapture(e.pointerId); }catch(err){ /* not fatal */ }
+    try{ handle.setPointerCapture(e.pointerId); }catch(err){ /* fine without it: the document-level fallback still finalizes on pointerup */ }
   });
   handle.addEventListener("pointermove", (e)=>{
-    if(!dragCtx || dragCtx.row!==row) return;
-    const dy = e.clientY - dragCtx.startY;
-    row.style.transform = `translateY(${dy}px)`;
+    if(!dragCtx || dragCtx.row!==row || e.pointerId!==dragCtx.pointerId) return;
+    dragCtx.lastY = e.clientY;
+    row.style.transform = `translateY(${e.clientY - dragCtx.startY}px)`;
   });
-  const endDrag = (e)=>{
-    if(!dragCtx || dragCtx.row!==row) return;
-    const dy = e.clientY - dragCtx.startY;
-    row.style.transform = "";
-    row.classList.remove("dragging-row");
-    const shift = Math.round(dy / dragCtx.rowHeight);
-    let targetIdx = dragCtx.origIndex + shift;
-    targetIdx = Math.max(0, Math.min(dragCtx.count-1, targetIdx));
-    const fromIdx = dragCtx.origIndex;
-    dragCtx = null;
-    if(targetIdx !== fromIdx) reorderMenuItem(cat, item, targetIdx);
-  };
-  handle.addEventListener("pointerup", endDrag);
-  handle.addEventListener("pointercancel", endDrag);
 }
 
 // Moves `item` to `targetVisIdx` among its category's non-combo items, keeping any combo items
@@ -1717,13 +1751,17 @@ function renderMenuEditor(){
         item.available = item.available===false ? true : false;
         saveState(); renderMenuEditor(); renderItemGridIfNeeded();
       };
-      nameInput.onchange = ()=>{ item.name = nameInput.value.trim()||item.name; saveState(); renderItemGridIfNeeded(); };
+      nameInput.onchange = ()=>{ item.name = nameInput.value.trim()||item.name; saveState(); renderComboListEditor(); renderItemGridIfNeeded(); };
       priceInput.onchange = ()=>{ item.price = Math.max(0, parseFloat(priceInput.value)||0); priceInput.value = item.price; saveState(); renderItemGridIfNeeded(); };
       delBtn.onclick = ()=>{
-        if(!confirm(`确定删除「${item.name}」?`)) return;
+        const usedInCombos = findCombosUsingItem(item.id);
+        const comboWarning = usedInCombos.length
+          ? `\n\n注意:这道菜是「${usedInCombos.join("、")}」套餐的内容之一,删除后套餐里会少这一样。`
+          : "";
+        if(!confirm(`确定删除「${item.name}」?${comboWarning}`)) return;
         cat.items = cat.items.filter(i=>i.id!==item.id);
         pushToTrash("item", item, { catId: cat.id });
-        saveState(); renderMenuEditor(); renderItemGridIfNeeded();
+        saveState(); renderMenuEditor(); renderComboListEditor(); renderItemGridIfNeeded();
       };
       list.appendChild(row);
     });
