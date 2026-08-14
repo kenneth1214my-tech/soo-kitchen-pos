@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202608142300">
+<link rel="manifest" href="manifest.json?v=202608142330">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202608142300">
-<link rel="icon" href="icon-192.png?v=202608142300">
-<link rel="stylesheet" href="style.css?v=202608142300">
+<link rel="apple-touch-icon" href="icon-192.png?v=202608142330">
+<link rel="icon" href="icon-192.png?v=202608142330">
+<link rel="stylesheet" href="style.css?v=202608142330">
 </head>
 <body>
 
@@ -302,9 +302,9 @@
 
         <hr>
         <label>数据备份</label>
+        <p id="lastBackupStatus" class="hint" style="text-align:left;"></p>
         <div class="backup-actions">
           <button id="btnExportBackup" class="secondary-btn">导出完整备份 (JSON)</button>
-          <button id="btnExportCsv" class="secondary-btn">导出销售记录 (CSV)</button>
           <button id="btnExportText" class="secondary-btn">导出为文字 (可复制)</button>
         </div>
         <label>从备份文件还原 (会覆盖现有菜单与设置)</label>
@@ -313,6 +313,20 @@
         <label>或粘贴备份文字还原 (适用于选不了文件的浏览器,例如 Kiosk 锁定浏览器)</label>
         <textarea id="importPasteArea" rows="4" placeholder="把导出的备份 JSON 文字整段贴在这里" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:13px;font-family:monospace;"></textarea>
         <button id="btnImportPaste" class="secondary-btn" style="margin-top:8px;">从粘贴的文字还原</button>
+
+        <hr>
+        <label>销售报表 (CSV,可直接用 Excel 打开)</label>
+        <div class="backup-actions">
+          <button class="secondary-btn" data-range="today">今天</button>
+          <button class="secondary-btn" data-range="week">本周</button>
+          <button class="secondary-btn" data-range="month">本月</button>
+          <button class="secondary-btn" data-range="all">全部</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <input type="date" id="csvStartDate" style="flex:1;padding:10px;border:1px solid var(--border);border-radius:8px;">
+          <input type="date" id="csvEndDate" style="flex:1;padding:10px;border:1px solid var(--border);border-radius:8px;">
+        </div>
+        <button id="btnExportCsv" class="primary-btn" style="margin-top:10px;">导出这段范围的销售记录</button>
 
         <hr>
         <button id="btnClearHistory" class="danger-btn">清空今日订单记录</button>
@@ -344,6 +358,6 @@
   </div>
 </div>
 
-<script src="app.js?v=202608142300"></script>
+<script src="app.js?v=202608142330"></script>
 </body>
 </html>

@@ -1129,6 +1129,8 @@ function populateSettingsForm(){
   renderMenuEditor();
   renderComboListEditor();
   renderPromoEditor();
+  renderLastBackupStatus();
+  if(!document.getElementById("csvStartDate").value) setCsvRange("today");
 }
 
 function renderPromoEditor(){
@@ -1214,9 +1216,53 @@ function downloadBlob(content, filename, mime){
   URL.revokeObjectURL(url);
 }
 
+// ---------- Backup reminders ----------
+// Everything lives in this device's localStorage with no server copy, so if the device is lost or
+// breaks and a backup was never taken, the data is very likely gone for good. This nudges the
+// habit rather than solving it outright (that would need cloud sync, a separate bigger project).
+const LAST_BACKUP_KEY = "sk_pos_last_backup";
+const BACKUP_REMIND_DAYS = 3;
+
+function markBackedUp(){
+  localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString());
+  renderLastBackupStatus();
+}
+
+function daysSinceLastBackup(){
+  const raw = localStorage.getItem(LAST_BACKUP_KEY);
+  if(!raw) return Infinity;
+  const d = new Date(raw);
+  if(isNaN(d)) return Infinity;
+  return (Date.now() - d.getTime()) / 86400000;
+}
+
+function renderLastBackupStatus(){
+  const el = document.getElementById("lastBackupStatus");
+  if(!el) return;
+  const raw = localStorage.getItem(LAST_BACKUP_KEY);
+  const days = daysSinceLastBackup();
+  if(!raw){
+    el.textContent = "⚠️ 还没有导出过备份 — 万一这台设备坏了,数据会全部遗失";
+    el.style.color = "var(--danger)";
+  }else if(days >= BACKUP_REMIND_DAYS){
+    el.textContent = `⚠️ 上次备份是 ${new Date(raw).toLocaleDateString("en-MY")},已经 ${Math.floor(days)} 天没备份了`;
+    el.style.color = "var(--danger)";
+  }else{
+    el.textContent = `上次备份: ${new Date(raw).toLocaleString("en-MY")}`;
+    el.style.color = "var(--text-mute)";
+  }
+}
+
+function maybeShowBackupReminder(){
+  if(daysSinceLastBackup() >= BACKUP_REMIND_DAYS){
+    alertToast("已经好几天没备份了,建议去设置导出一次");
+  }
+}
+
 function exportBackup(){
   const payload = { exportedAt: new Date().toISOString(), state, history, heldOrders };
   downloadBlob(JSON.stringify(payload, null, 2), `soos-kitchen-pos-backup-${todayStr()}.json`, "application/json");
+  markBackedUp();
   alertToast("备份已导出");
 }
 
@@ -1229,14 +1275,55 @@ function exportBackupAsText(){
   area.value = JSON.stringify(payload);
   area.focus();
   area.select();
+  markBackedUp();
   alertToast("备份文字已生成,长按全选复制");
 }
 
+// ---------- Sales report export (date-range CSV) ----------
+function dateInputStr(d){
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+function startOfWeekStr(){
+  const d = new Date();
+  const dow = (d.getDay()+6)%7; // Mon=0..Sun=6
+  d.setDate(d.getDate()-dow);
+  return dateInputStr(d);
+}
+function startOfMonthStr(){
+  const d = new Date();
+  return dateInputStr(new Date(d.getFullYear(), d.getMonth(), 1));
+}
+function earliestHistoryDateStr(){
+  if(history.length===0) return todayStr();
+  return history.reduce((min,o)=> o.date<min ? o.date : min, history[0].date);
+}
+
+function setCsvRange(range){
+  const startInput = document.getElementById("csvStartDate");
+  const endInput = document.getElementById("csvEndDate");
+  const today = todayStr();
+  if(range==="today"){ startInput.value = today; endInput.value = today; }
+  else if(range==="week"){ startInput.value = startOfWeekStr(); endInput.value = today; }
+  else if(range==="month"){ startInput.value = startOfMonthStr(); endInput.value = today; }
+  else if(range==="all"){ startInput.value = earliestHistoryDateStr(); endInput.value = today; }
+}
+
 function exportHistoryCsv(){
-  const rows = [["订单号","日期","时间","付款方式","小计","折扣","税","总计","是否分单","是否作废"]];
-  history.forEach(o=> rows.push([o.orderNo,o.date,o.time,o.paymentMethod==="cash"?"现金":"电子钱包",o.subtotal,o.discount||0,o.tax||0,o.total,o.isSplit?"是":"否",o.voided?"是":"否"]));
+  const start = document.getElementById("csvStartDate").value || earliestHistoryDateStr();
+  const end = document.getElementById("csvEndDate").value || todayStr();
+  const filtered = history.filter(o=> o.date>=start && o.date<=end);
+  if(filtered.length===0){ alertToast("这段范围内没有订单记录"); return; }
+  const rows = [["订单号","日期","时间","付款方式","小计","折扣","服务税","现金四舍五入","总计","是否分单","是否作废"]];
+  filtered.forEach(o=> rows.push([
+    o.orderNo, o.date, o.time, o.paymentMethod==="cash"?"现金":"电子钱包",
+    o.subtotal, o.discount||0, o.tax||0, o.roundingAdj||0, o.total,
+    o.isSplit?"是":"否", o.voided?"是":"否"
+  ]));
+  const validRows = filtered.filter(o=>!o.voided);
+  rows.push([]);
+  rows.push(["合计 (不含已作废)","","","", "", "", "", "", validRows.reduce((s,o)=>s+o.total,0).toFixed(2), "", ""]);
   const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n");
-  downloadBlob("﻿"+csv, `sales-history-${todayStr()}.csv`, "text/csv;charset=utf-8");
+  downloadBlob("﻿"+csv, `sales-${start}_to_${end}.csv`, "text/csv;charset=utf-8");
   alertToast("销售记录已导出");
 }
 
@@ -2047,6 +2134,7 @@ function init(){
   renderCart();
   renderHeldBadge();
   renderTrashBadge();
+  maybeShowBackupReminder();
   tickClock();
   setInterval(tickClock, 15000);
 
@@ -2077,6 +2165,9 @@ function init(){
   document.getElementById("btnExportBackup").onclick = exportBackup;
   document.getElementById("btnExportCsv").onclick = exportHistoryCsv;
   document.getElementById("btnExportText").onclick = exportBackupAsText;
+  document.querySelectorAll("[data-range]").forEach(btn=>{
+    btn.onclick = ()=> setCsvRange(btn.dataset.range);
+  });
   document.getElementById("inputImportBackup").addEventListener("change", (e)=>{
     const file = e.target.files[0];
     if(file) importBackup(file);
