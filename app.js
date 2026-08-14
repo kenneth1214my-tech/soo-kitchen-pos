@@ -1353,7 +1353,14 @@ function connectCloudSync(configObj, shopId, isReconnect){
 
   if(cloudUnsub){ cloudUnsub(); cloudUnsub = null; }
   cloudUnsub = cloudDocRef(shopId).onSnapshot(snap=>{
+    // "lastSyncedAt" means "last time we successfully heard from Firestore", not "last time
+    // data actually changed" — otherwise two devices that already agree (e.g. right after the
+    // first connect, before either has edited anything) would show "尚未同步" forever even
+    // though the live connection is healthy, which reads as broken to a non-technical user.
     cloudLastError = null;
+    const cfg = loadCloudConfig();
+    if(cfg){ cfg.lastSyncedAt = new Date().toISOString(); saveCloudConfig(cfg); }
+
     if(!snap.exists){
       pushCloudState();
       renderCloudSyncStatus();
@@ -1370,8 +1377,6 @@ function connectCloudSync(configObj, shopId, isReconnect){
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     applyingRemoteCloudState = false;
 
-    const cfg = loadCloudConfig();
-    if(cfg){ cfg.lastSyncedAt = new Date().toISOString(); saveCloudConfig(cfg); }
     document.getElementById("shopName").textContent = state.settings.shopName;
     renderCategoryTabs();
     renderItemGrid();
