@@ -769,7 +769,11 @@ function reopenOrder(orderNo){
   requestPinConfirm(`重开订单 ${orderNo} 到购物车`, ()=>{
     const ord = history.find(o=>o.orderNo===orderNo);
     if(!ord) return;
-    if(cart.length>0 && !confirm("当前购物车还有内容,重开此单会覆盖现有购物车,确定吗？")) return;
+    // Always confirm before touching the cart, even when it's currently empty (the common case
+    // right after finishing an order) — a mis-tap on 重开 next to 作废 previously slipped straight
+    // through with no checkpoint at all when the cart happened to be empty.
+    const warnExtra = cart.length>0 ? "\n\n当前购物车还有内容,会被覆盖。" : "";
+    if(!confirm(`确定把订单 ${orderNo} 的内容重新放入购物车吗?${warnExtra}`)) return;
     cart = ord.items.map(it=>{
       const menuItem = findMenuItemByName(it.name);
       return { itemId: menuItem ? menuItem.id : "reopen_"+it.name, name: it.name, price: it.price, qty: it.qty, note: it.note||"" };
@@ -777,6 +781,10 @@ function reopenOrder(orderNo){
     resetOrderState();
     renderCart();
     hideModal("historyModal");
+    // Surface the reopened cart immediately (relevant on mobile widths where the cart pane is
+    // otherwise tucked behind the FAB) so it's obvious what just happened, not just a quiet
+    // change behind the item grid.
+    document.getElementById("cartPane").classList.add("open");
     alertToast("已把该订单内容放入购物车,请核实后重新结账");
   });
 }
