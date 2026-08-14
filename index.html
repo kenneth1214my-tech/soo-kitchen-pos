@@ -142,11 +142,19 @@
 <!-- Combo (Set Meal) Editor Modal -->
 <div id="comboEditModal" class="modal hidden">
   <div class="modal-box wide">
-    <div class="modal-header"><span id="comboEditTitle">套餐内容</span><button class="close-btn" data-close="comboEditModal">✕</button></div>
-    <p class="hint" style="text-align:left;">勾选这个套餐里包含哪些菜品,以及各几份。价格用上面设定的套餐价,与单点总和无关。</p>
+    <div class="modal-header"><span id="comboEditTitle">新增套餐</span><button class="close-btn" data-close="comboEditModal">✕</button></div>
+    <div style="padding:0 18px;">
+      <label>套餐名称</label>
+      <input type="text" id="comboNameInput" placeholder="例如：A餐">
+      <label>套餐价格 (RM)</label>
+      <input type="number" id="comboPriceInput" step="0.10" min="0" placeholder="0.00">
+      <label>放在哪个分类</label>
+      <select id="comboCategorySelect" class="select-input"></select>
+      <label style="margin-top:14px;">套餐内容 — 勾选包含哪些菜品、各几份</label>
+    </div>
     <div id="comboEditList" class="combo-edit-list"></div>
     <div class="receipt-actions" style="padding:14px 18px;">
-      <button id="btnClearCombo" class="secondary-btn">清空套餐 (变回单点)</button>
+      <button id="btnDeleteCombo" class="danger-btn hidden">删除套餐</button>
       <button id="btnSaveCombo" class="primary-btn">保存套餐</button>
     </div>
   </div>
@@ -228,6 +236,7 @@
       <div class="settings-tabs">
         <button class="settings-tab active" data-tab="general">基本设置</button>
         <button class="settings-tab" data-tab="menu">菜单管理</button>
+        <button class="settings-tab" data-tab="combo">套餐管理</button>
         <button class="settings-tab" data-tab="promo">优惠管理</button>
       </div>
 
@@ -285,6 +294,14 @@
           <button id="btnAddCategory" class="secondary-btn">+ 新增分类</button>
         </div>
         <div id="categoryEditorList"></div>
+      </div>
+
+      <div id="tabCombo" class="settings-panel hidden">
+        <p class="hint" style="text-align:left;">套餐是打包价卖的组合(例如"A餐: 炒饭+饮料 = RM12"),在这里统一管理名称、价格和内容,跟单点菜品分开。</p>
+        <div class="menu-editor-actions">
+          <button id="btnAddCombo" class="secondary-btn">+ 新增套餐</button>
+        </div>
+        <div id="comboListEditor"></div>
       </div>
 
       <div id="tabPromo" class="settings-panel hidden">

@@ -368,6 +368,18 @@ input{font-family:inherit;}
 }
 .item-card .combo-contents{font-size:11px;color:var(--text-mute);padding:0 8px;margin-top:-2px;}
 
+.combo-list-row{
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+  padding:12px 0;border-bottom:1px dashed var(--border);
+}
+.combo-list-row .cl-name{font-weight:700;font-size:15px;}
+.combo-list-row .cl-detail{font-size:12px;color:var(--text-mute);max-width:220px;}
+.combo-list-row .cl-price{color:var(--brand);font-weight:700;font-size:14px;white-space:nowrap;}
+.combo-list-row button{
+  padding:8px 14px;border-radius:8px;border:1px solid var(--border);
+  background:#fff;font-size:13px;font-weight:600;flex-shrink:0;
+}
+
 /* Promotions */
 .promo-presets button{background:#fff4ea;border-color:var(--brand);color:var(--brand-dark);}
 .promo-editor-row{

@@ -1056,6 +1056,7 @@ function populateSettingsForm(){
     preview.classList.add("hidden");
   }
   renderMenuEditor();
+  renderComboListEditor();
   renderPromoEditor();
 }
 
@@ -1472,7 +1473,7 @@ function renderMenuEditor(){
     container.appendChild(box);
 
     const list = box.querySelector(`[data-list="${cat.id}"]`);
-    cat.items.forEach(item=>{
+    cat.items.filter(item=>!isCombo(item)).forEach(item=>{
       const row = document.createElement("div");
       row.className = "item-editor-row";
       const photoInner = item.image ? `<img src="${item.image}" alt="">` : `<span>📷</span>`;
@@ -1487,7 +1488,6 @@ function renderMenuEditor(){
           <div class="ie-line2">
             <button class="avail-toggle" title="上架/售罄">${item.available===false?"🚫":"✅"}</button>
             <input type="number" step="0.10" min="0" value="${item.price}" placeholder="价格">
-            <button data-act="combo" title="设置套餐内容">🍱${isCombo(item)?"<span class=\"combo-tag\">套餐</span>":""}</button>
           </div>
         </div>
       `;
@@ -1497,8 +1497,6 @@ function renderMenuEditor(){
       const priceInput = row.querySelector('input[type="number"]');
       const availBtn = row.querySelector(".avail-toggle");
       const delBtn = row.querySelector('[data-act="delitem"]');
-      const comboBtn = row.querySelector('[data-act="combo"]');
-      comboBtn.onclick = ()=> openComboEditModal(item);
 
       photoBtn.onclick = ()=> photoInput.click();
       photoInput.onchange = (e)=>{
@@ -1526,7 +1524,7 @@ function renderMenuEditor(){
       if(!confirm(`确定删除分类「${cat.name}」及其所有菜品?`)) return;
       state.menu = state.menu.filter(c=>c.id!==cat.id);
       if(activeCategory===cat.id){ activeCategory = state.menu[0]?state.menu[0].id:null; }
-      saveState(); renderMenuEditor(); renderCategoryTabs(); renderItemGrid();
+      saveState(); renderMenuEditor(); renderComboListEditor(); renderCategoryTabs(); renderItemGrid();
     };
     box.querySelector('[data-act="additem"]').onclick = ()=>{
       cat.items.push({ id:uid(), name:"新菜品", price:0, available:true, image:"" });
@@ -1539,15 +1537,67 @@ function renderMenuEditor(){
   });
 }
 
-// ---------- Combo (set meal) editor ----------
+// ---------- Combo (set meal) management ----------
+// Combos are managed on their own dedicated 套餐管理 settings page, separate from regular menu
+// items — this holds the item being edited (null while creating a new combo) and its original
+// category id (so we can move it if the category dropdown changes, or remove it on delete).
 let comboEditItem = null;
+let comboEditOrigCatId = null;
 let comboEditDraft = {}; // itemId -> qty
 
-function openComboEditModal(item){
-  comboEditItem = item;
+function allCombos(){
+  const out = [];
+  state.menu.forEach(cat=>{
+    cat.items.forEach(item=>{ if(isCombo(item)) out.push({item, cat}); });
+  });
+  return out;
+}
+
+function renderComboListEditor(){
+  const list = document.getElementById("comboListEditor");
+  const combos = allCombos();
+  if(combos.length===0){
+    list.innerHTML = `<div class="cart-empty">还没有套餐,点上面「+ 新增套餐」建立第一个</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  combos.forEach(({item, cat})=>{
+    const contents = resolveComboContents(item);
+    const row = document.createElement("div");
+    row.className = "combo-list-row";
+    row.innerHTML = `
+      <div>
+        <div class="cl-name">${escapeHtml(item.name)} <span class="combo-tag">${escapeHtml(cat.name)}</span></div>
+        <div class="cl-detail">含: ${contents.map(c=>escapeHtml(c.name)+(c.qty>1?"x"+c.qty:"")).join("、")||"(尚未选内容)"}</div>
+      </div>
+      <div class="cl-price">${fmt(item.price)}</div>
+      <button data-act="editcombo">编辑</button>
+    `;
+    row.querySelector('[data-act="editcombo"]').onclick = ()=> openComboEditModal(item, cat.id);
+    list.appendChild(row);
+  });
+}
+
+function populateComboCategorySelect(selectedCatId){
+  const sel = document.getElementById("comboCategorySelect");
+  sel.innerHTML = state.menu.map(cat=>`<option value="${cat.id}">${escapeHtml(cat.name)}</option>`).join("");
+  sel.value = selectedCatId || (state.menu[0] ? state.menu[0].id : "");
+}
+
+function openComboEditModal(item, catId){
+  if(state.menu.length===0){
+    alertToast("请先在「菜单管理」新增至少一个分类");
+    return;
+  }
+  comboEditItem = item || null;
+  comboEditOrigCatId = catId || null;
   comboEditDraft = {};
-  (item.comboItems||[]).forEach(ci=>{ comboEditDraft[ci.itemId] = ci.qty; });
-  document.getElementById("comboEditTitle").textContent = `${item.name} · 套餐内容`;
+  (item && item.comboItems || []).forEach(ci=>{ comboEditDraft[ci.itemId] = ci.qty; });
+  document.getElementById("comboEditTitle").textContent = item ? "编辑套餐" : "新增套餐";
+  document.getElementById("comboNameInput").value = item ? item.name : "";
+  document.getElementById("comboPriceInput").value = item ? item.price : "";
+  populateComboCategorySelect(catId);
+  document.getElementById("btnDeleteCombo").classList.toggle("hidden", !item);
   renderComboEditList();
   showModal("comboEditModal");
 }
@@ -1555,8 +1605,9 @@ function openComboEditModal(item){
 function renderComboEditList(){
   const list = document.getElementById("comboEditList");
   list.innerHTML = "";
+  const selfId = comboEditItem ? comboEditItem.id : null;
   state.menu.forEach(cat=>{
-    const eligible = cat.items.filter(i=>i.id!==comboEditItem.id);
+    const eligible = cat.items.filter(i=>i.id!==selfId && !isCombo(i));
     if(eligible.length===0) return;
     const label = document.createElement("div");
     label.className = "combo-cat-label";
@@ -1591,23 +1642,48 @@ function renderComboEditList(){
 }
 
 function saveCombo(){
-  comboEditItem.comboItems = Object.keys(comboEditDraft)
+  const name = document.getElementById("comboNameInput").value.trim();
+  const price = Math.max(0, parseFloat(document.getElementById("comboPriceInput").value)||0);
+  const newCatId = document.getElementById("comboCategorySelect").value;
+  const comboItems = Object.keys(comboEditDraft)
     .filter(id=>comboEditDraft[id]>0)
     .map(id=>({itemId:id, qty:comboEditDraft[id]}));
+  if(!name){ alertToast("请输入套餐名称"); return; }
+  if(comboItems.length===0){ alertToast("请至少勾选一样套餐内含的菜品"); return; }
+  const newCat = state.menu.find(c=>c.id===newCatId);
+  if(!newCat){ alertToast("请选择套餐所属分类"); return; }
+
+  if(comboEditItem){
+    comboEditItem.name = name;
+    comboEditItem.price = price;
+    comboEditItem.comboItems = comboItems;
+    if(newCatId !== comboEditOrigCatId){
+      const oldCat = state.menu.find(c=>c.id===comboEditOrigCatId);
+      if(oldCat) oldCat.items = oldCat.items.filter(i=>i.id!==comboEditItem.id);
+      newCat.items.push(comboEditItem);
+    }
+  }else{
+    newCat.items.push({ id:uid(), name, price, available:true, image:"", comboItems });
+  }
   saveState();
+  renderComboListEditor();
   renderMenuEditor();
   renderItemGridIfNeeded();
   hideModal("comboEditModal");
-  alertToast(comboEditItem.comboItems.length ? "套餐已保存" : "已变回单点菜品");
+  alertToast("套餐已保存");
 }
 
-function clearCombo(){
-  comboEditItem.comboItems = [];
+function deleteCombo(){
+  if(!comboEditItem) return;
+  if(!confirm(`确定删除套餐「${comboEditItem.name}」?`)) return;
+  const cat = state.menu.find(c=>c.id===comboEditOrigCatId);
+  if(cat) cat.items = cat.items.filter(i=>i.id!==comboEditItem.id);
   saveState();
+  renderComboListEditor();
   renderMenuEditor();
   renderItemGridIfNeeded();
   hideModal("comboEditModal");
-  alertToast("已变回单点菜品");
+  alertToast("套餐已删除");
 }
 
 function renderItemGridIfNeeded(){
@@ -1743,6 +1819,7 @@ function init(){
       document.querySelectorAll(".settings-tab").forEach(t=>t.classList.toggle("active", t===tab));
       document.getElementById("tabGeneral").classList.toggle("hidden", tab.dataset.tab!=="general");
       document.getElementById("tabMenu").classList.toggle("hidden", tab.dataset.tab!=="menu");
+      document.getElementById("tabCombo").classList.toggle("hidden", tab.dataset.tab!=="combo");
       document.getElementById("tabPromo").classList.toggle("hidden", tab.dataset.tab!=="promo");
     };
   });
@@ -1750,8 +1827,9 @@ function init(){
   document.getElementById("inputQrFile").addEventListener("change", handleQrFile);
   document.getElementById("btnAddCategory").onclick = addCategory;
   document.getElementById("btnAddPromo").onclick = addPromo;
+  document.getElementById("btnAddCombo").onclick = ()=> openComboEditModal(null, null);
   document.getElementById("btnSaveCombo").onclick = saveCombo;
-  document.getElementById("btnClearCombo").onclick = clearCombo;
+  document.getElementById("btnDeleteCombo").onclick = deleteCombo;
   document.getElementById("btnClearHistory").onclick = ()=>{
     if(confirm("确定清空今天的所有订单记录?此操作无法撤销。")){
       const t = todayStr();
