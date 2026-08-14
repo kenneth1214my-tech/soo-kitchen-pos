@@ -1198,6 +1198,18 @@ function exportBackup(){
   alertToast("备份已导出");
 }
 
+// Fills the same textarea the paste-import reads from, with the current backup as text — for
+// kiosk/lockdown browsers where file downloads may also be restricted. Uses select() rather than
+// the Clipboard API since that can be blocked too; the operator selects-all and copies manually.
+function exportBackupAsText(){
+  const payload = { exportedAt: new Date().toISOString(), state, history, heldOrders };
+  const area = document.getElementById("importPasteArea");
+  area.value = JSON.stringify(payload);
+  area.focus();
+  area.select();
+  alertToast("备份文字已生成,长按全选复制");
+}
+
 function exportHistoryCsv(){
   const rows = [["订单号","日期","时间","付款方式","小计","折扣","税","总计","是否分单","是否作废"]];
   history.forEach(o=> rows.push([o.orderNo,o.date,o.time,o.paymentMethod==="cash"?"现金":"电子钱包",o.subtotal,o.discount||0,o.tax||0,o.total,o.isSplit?"是":"否",o.voided?"是":"否"]));
@@ -1206,30 +1218,43 @@ function exportHistoryCsv(){
   alertToast("销售记录已导出");
 }
 
+// Shared by both import paths (native file picker and the paste-text fallback below). Kiosk/
+// lockdown browsers (e.g. Fully Kiosk Browser) often disable the native file chooser entirely as
+// part of their lockdown, so <input type="file"> alone isn't a reliable import path on this app's
+// actual target hardware — the paste-text route works anywhere a textarea does.
+function applyBackupJson(jsonText){
+  let payload;
+  try{ payload = JSON.parse(jsonText); }
+  catch(err){ alertToast("内容不是有效的备份格式,无法导入"); return; }
+  if(!payload || !payload.state || !payload.state.menu){ alertToast("备份内容不完整,无法导入"); return; }
+  const fmtTime = iso => { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? d.toLocaleString("en-MY") : "未知时间"; };
+  const incomingTime = fmtTime(payload.state.lastModified || payload.exportedAt);
+  const localTime = fmtTime(state.lastModified);
+  if(!confirm(`即将导入的备份最后修改于:\n${incomingTime}\n\n本机现有数据最后修改于:\n${localTime}\n\n导入会完全覆盖本机的菜单、设置与销售记录,确定要继续吗？`)) return;
+  state = Object.assign(deepClone(DEFAULT_STATE), payload.state, {
+    settings: Object.assign({}, DEFAULT_STATE.settings, payload.state.settings||{})
+  });
+  history = Array.isArray(payload.history) ? payload.history : [];
+  heldOrders = Array.isArray(payload.heldOrders) ? payload.heldOrders : [];
+  saveState(); saveHistory(); saveHeldOrders();
+  activeCategory = state.menu[0] ? state.menu[0].id : null;
+  document.getElementById("shopName").textContent = state.settings.shopName;
+  renderCategoryTabs(); renderItemGrid(); renderCart(); renderHeldBadge(); renderTrashBadge();
+  populateSettingsForm();
+  alertToast("备份已还原");
+}
+
 function importBackup(file){
   const reader = new FileReader();
-  reader.onload = (e)=>{
-    let payload;
-    try{ payload = JSON.parse(e.target.result); }
-    catch(err){ alertToast("文件格式错误,无法导入"); return; }
-    if(!payload || !payload.state || !payload.state.menu){ alertToast("文件内容不完整,无法导入"); return; }
-    const fmtTime = iso => { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? d.toLocaleString("en-MY") : "未知时间"; };
-    const incomingTime = fmtTime(payload.state.lastModified || payload.exportedAt);
-    const localTime = fmtTime(state.lastModified);
-    if(!confirm(`即将导入的备份最后修改于:\n${incomingTime}\n\n本机现有数据最后修改于:\n${localTime}\n\n导入会完全覆盖本机的菜单、设置与销售记录,确定要继续吗？`)) return;
-    state = Object.assign(deepClone(DEFAULT_STATE), payload.state, {
-      settings: Object.assign({}, DEFAULT_STATE.settings, payload.state.settings||{})
-    });
-    history = Array.isArray(payload.history) ? payload.history : [];
-    heldOrders = Array.isArray(payload.heldOrders) ? payload.heldOrders : [];
-    saveState(); saveHistory(); saveHeldOrders();
-    activeCategory = state.menu[0] ? state.menu[0].id : null;
-    document.getElementById("shopName").textContent = state.settings.shopName;
-    renderCategoryTabs(); renderItemGrid(); renderCart(); renderHeldBadge(); renderTrashBadge();
-    populateSettingsForm();
-    alertToast("备份已还原");
-  };
+  reader.onload = (e)=> applyBackupJson(e.target.result);
   reader.readAsText(file);
+}
+
+function importBackupFromPaste(){
+  const text = document.getElementById("importPasteArea").value.trim();
+  if(!text){ alertToast("请先把备份文字贴进来"); return; }
+  applyBackupJson(text);
+  document.getElementById("importPasteArea").value = "";
 }
 
 // ---------- Bluetooth thermal printer ----------
@@ -2029,11 +2054,13 @@ function init(){
 
   document.getElementById("btnExportBackup").onclick = exportBackup;
   document.getElementById("btnExportCsv").onclick = exportHistoryCsv;
+  document.getElementById("btnExportText").onclick = exportBackupAsText;
   document.getElementById("inputImportBackup").addEventListener("change", (e)=>{
     const file = e.target.files[0];
     if(file) importBackup(file);
     e.target.value = "";
   });
+  document.getElementById("btnImportPaste").onclick = importBackupFromPaste;
 
   document.querySelectorAll("#checkoutModal .pay-tab").forEach(btn=>{
     btn.onclick = ()=> switchPayTab(btn.dataset.method);

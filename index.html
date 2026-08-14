@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202608142200">
+<link rel="manifest" href="manifest.json?v=202608142230">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202608142200">
-<link rel="icon" href="icon-192.png?v=202608142200">
-<link rel="stylesheet" href="style.css?v=202608142200">
+<link rel="apple-touch-icon" href="icon-192.png?v=202608142230">
+<link rel="icon" href="icon-192.png?v=202608142230">
+<link rel="stylesheet" href="style.css?v=202608142230">
 </head>
 <body>
 
@@ -305,9 +305,14 @@
         <div class="backup-actions">
           <button id="btnExportBackup" class="secondary-btn">导出完整备份 (JSON)</button>
           <button id="btnExportCsv" class="secondary-btn">导出销售记录 (CSV)</button>
+          <button id="btnExportText" class="secondary-btn">导出为文字 (可复制)</button>
         </div>
         <label>从备份文件还原 (会覆盖现有菜单与设置)</label>
         <input type="file" id="inputImportBackup" accept=".json,application/json">
+
+        <label>或粘贴备份文字还原 (适用于选不了文件的浏览器,例如 Kiosk 锁定浏览器)</label>
+        <textarea id="importPasteArea" rows="4" placeholder="把导出的备份 JSON 文字整段贴在这里" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:13px;font-family:monospace;"></textarea>
+        <button id="btnImportPaste" class="secondary-btn" style="margin-top:8px;">从粘贴的文字还原</button>
 
         <hr>
         <button id="btnClearHistory" class="danger-btn">清空今日订单记录</button>
@@ -339,6 +344,6 @@
   </div>
 </div>
 
-<script src="app.js?v=202608142200"></script>
+<script src="app.js?v=202608142230"></script>
 </body>
 </html>
