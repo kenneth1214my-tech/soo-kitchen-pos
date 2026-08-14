@@ -1,0 +1,1565 @@
+(function(){
+"use strict";
+
+const STORAGE_KEY = "sk_pos_state_v1";
+const HISTORY_KEY = "sk_pos_orders_v1";
+const HELD_KEY = "sk_pos_held_v1";
+
+const DEFAULT_STATE = {
+  settings:{
+    shopName:"Soo's Kitchen",
+    taxEnabled:false,
+    taxRate:6,
+    qrImage:"",
+    pin:"0000",
+    discountPinRequired:false,
+    deviceLabel:"",
+    paperWidth:"58",
+    autoPrintKitchen:true
+  },
+  menu:[
+    { id:"cat1", name:"主食 Mains", items:[
+      { id:"i1", name:"招牌炒饭", price:9.90, available:true, image:"" },
+      { id:"i2", name:"咖喱鸡饭", price:11.50, available:true, image:"" },
+      { id:"i3", name:"叉烧饭", price:10.00, available:true, image:"" }
+    ]},
+    { id:"cat2", name:"饮料 Drinks", items:[
+      { id:"i4", name:"美禄冰", price:4.50, available:true, image:"" },
+      { id:"i5", name:"拉茶", price:3.50, available:true, image:"" },
+      { id:"i6", name:"矿泉水", price:2.00, available:true, image:"" }
+    ]},
+    { id:"cat3", name:"小吃 Snacks", items:[
+      { id:"i7", name:"炸鸡翅 (3pcs)", price:7.00, available:true, image:"" }
+    ]}
+  ],
+  nextOrderSeq:1,
+  lastOrderDate:""
+};
+
+function loadState(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return structuredClone(DEFAULT_STATE);
+    const parsed = JSON.parse(raw);
+    return Object.assign(structuredClone(DEFAULT_STATE), parsed, {
+      settings: Object.assign({}, DEFAULT_STATE.settings, parsed.settings||{})
+    });
+  }catch(e){ return structuredClone(DEFAULT_STATE); }
+}
+function saveState(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+
+function loadHistory(){
+  try{ return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; }
+  catch(e){ return []; }
+}
+function saveHistory(){ localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); }
+
+function loadHeldOrders(){
+  try{ return JSON.parse(localStorage.getItem(HELD_KEY)) || []; }
+  catch(e){ return []; }
+}
+function saveHeldOrders(){ localStorage.setItem(HELD_KEY, JSON.stringify(heldOrders)); }
+
+let state = loadState();
+let history = loadHistory();
+let heldOrders = loadHeldOrders();
+let cart = []; // {itemId, name, price, qty, note}
+let activeCategory = state.menu[0] ? state.menu[0].id : null;
+let unlockedSettings = false;
+let discount = null; // {type:'percent'|'amount', value:number}
+
+function fmt(n){ return "RM" + (Math.round(n*100)/100).toFixed(2); }
+function round2(n){ return Math.round(n*100)/100; }
+function roundToNickel(n){ return Math.round(n*20)/20; }
+function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+
+function ensureOrderSeq(){
+  const t = todayStr();
+  if(state.lastOrderDate !== t){
+    state.lastOrderDate = t;
+    state.nextOrderSeq = 1;
+    saveState();
+  }
+}
+function peekOrderNo(){
+  ensureOrderSeq();
+  const prefix = state.settings.deviceLabel ? state.settings.deviceLabel.trim()+"-" : "";
+  return prefix + "#" + String(state.nextOrderSeq).padStart(3,"0");
+}
+
+// ---------- Rendering: menu ----------
+function renderCategoryTabs(){
+  const nav = document.getElementById("categoryTabs");
+  nav.innerHTML = "";
+  state.menu.forEach(cat=>{
+    const btn = document.createElement("button");
+    btn.className = "cat-tab" + (cat.id===activeCategory?" active":"");
+    btn.textContent = cat.name;
+    btn.onclick = ()=>{ activeCategory = cat.id; renderCategoryTabs(); renderItemGrid(); };
+    nav.appendChild(btn);
+  });
+}
+
+function renderItemGrid(){
+  const grid = document.getElementById("itemGrid");
+  grid.innerHTML = "";
+  const cat = state.menu.find(c=>c.id===activeCategory);
+  if(!cat) return;
+  cat.items.forEach(item=>{
+    const card = document.createElement("div");
+    card.className = "item-card" + (item.available===false ? " unavailable" : "");
+    const photoInner = item.image
+      ? `<img src="${item.image}" alt="">`
+      : `<span class="photo-placeholder">🍽️</span>`;
+    const toggleLabel = item.available===false ? "↺ 恢复上架" : "🚫";
+    card.innerHTML = `
+      <div class="item-photo">
+        ${photoInner}
+        ${item.available===false ? `<div class="badge">已售罄</div>` : ""}
+        <button class="item-quick-toggle" title="标记售罄/恢复">${toggleLabel}</button>
+      </div>
+      <div class="name">${escapeHtml(item.name)}</div>
+      <div class="price">${fmt(item.price)}</div>
+    `;
+    if(item.available!==false){
+      card.onclick = ()=> addToCart(item);
+    }
+    card.querySelector(".item-quick-toggle").onclick = (e)=>{
+      e.stopPropagation();
+      item.available = item.available===false ? true : false;
+      saveState();
+      renderItemGrid();
+      alertToast(item.available===false ? `${item.name} 已标记售罄` : `${item.name} 已恢复上架`);
+    };
+    grid.appendChild(card);
+  });
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// ---------- Cart ----------
+function addToCart(item){
+  const existing = cart.find(c=>c.itemId===item.id);
+  if(existing){ existing.qty++; }
+  else{ cart.push({ itemId:item.id, name:item.name, price:item.price, qty:1, note:"" }); }
+  renderCart();
+}
+function changeQty(itemId, delta){
+  const line = cart.find(c=>c.itemId===itemId);
+  if(!line) return;
+  line.qty += delta;
+  if(line.qty<=0){ cart = cart.filter(c=>c.itemId!==itemId); }
+  renderCart();
+}
+function removeLine(itemId){
+  cart = cart.filter(c=>c.itemId!==itemId);
+  renderCart();
+}
+function clearCart(){
+  cart = [];
+  discount = null;
+  activeOrderNo = null;
+  splitGroups = null;
+  renderCart();
+}
+function cartSubtotal(){ return cart.reduce((s,c)=>s+c.price*c.qty,0); }
+function discountAmount(){
+  if(!discount) return 0;
+  const sub = cartSubtotal();
+  let amt = discount.type==="percent" ? sub*discount.value/100 : discount.value;
+  return Math.min(Math.max(amt,0), sub);
+}
+function discountedSubtotal(){ return cartSubtotal() - discountAmount(); }
+function cartTax(){ return state.settings.taxEnabled ? discountedSubtotal()*state.settings.taxRate/100 : 0; }
+function cartTotal(){ return discountedSubtotal()+cartTax(); }
+function cartCount(){ return cart.reduce((s,c)=>s+c.qty,0); }
+
+function renderCart(){
+  const list = document.getElementById("cartList");
+  list.innerHTML = "";
+  if(cart.length===0){
+    list.innerHTML = `<div class="cart-empty">尚未点餐<br>点击左侧菜品加入订单</div>`;
+  }else{
+    cart.forEach(line=>{
+      const row = document.createElement("div");
+      row.className = "cart-item";
+      row.innerHTML = `
+        <div class="ci-info">
+          <div class="ci-name">${escapeHtml(line.name)}</div>
+          <div class="ci-price">${fmt(line.price)} x ${line.qty} = ${fmt(line.price*line.qty)}</div>
+          <div class="ci-note">
+            ${line.note ? `<span class="ci-note-text">📝 ${escapeHtml(line.note)}</span>` : ""}
+            <button class="ci-note-btn" data-act="note">${line.note ? "修改备注" : "+ 加备注"}</button>
+          </div>
+        </div>
+        <div class="qty-stepper">
+          <button data-act="minus">−</button>
+          <span>${line.qty}</span>
+          <button data-act="plus">+</button>
+        </div>
+        <button class="ci-remove" data-act="remove">🗑</button>
+      `;
+      row.querySelector('[data-act="minus"]').onclick = ()=>changeQty(line.itemId,-1);
+      row.querySelector('[data-act="plus"]').onclick = ()=>changeQty(line.itemId,1);
+      row.querySelector('[data-act="remove"]').onclick = ()=>removeLine(line.itemId);
+      row.querySelector('[data-act="note"]').onclick = ()=>openItemNoteModal(line.itemId);
+      list.appendChild(row);
+    });
+  }
+
+  document.getElementById("subtotalVal").textContent = fmt(cartSubtotal());
+
+  const rowDiscount = document.getElementById("rowDiscount");
+  const rowDiscountAdd = document.getElementById("rowDiscountAdd");
+  if(discount){
+    rowDiscount.classList.remove("hidden");
+    rowDiscountAdd.classList.add("hidden");
+    const label = discount.type==="percent" ? `折扣 (${discount.value}%)` : "折扣";
+    rowDiscount.querySelector("span:first-child").innerHTML = `${label} <button id="btnRemoveDiscount" class="mini-x">✕</button>`;
+    document.getElementById("btnRemoveDiscount").onclick = removeDiscount;
+    document.getElementById("discountVal").textContent = "-" + fmt(discountAmount());
+  }else{
+    rowDiscount.classList.add("hidden");
+    rowDiscountAdd.classList.remove("hidden");
+  }
+
+  const rowTax = document.getElementById("rowTax");
+  if(state.settings.taxEnabled){
+    rowTax.style.display = "flex";
+    document.getElementById("taxLabel").textContent = `服务税 (${state.settings.taxRate}%)`;
+    document.getElementById("taxVal").textContent = fmt(cartTax());
+  }else{
+    rowTax.style.display = "none";
+  }
+  document.getElementById("totalVal").textContent = fmt(cartTotal());
+  document.getElementById("orderNoLabel").textContent = activeOrderNo || peekOrderNo();
+
+  const hasItems = cart.length>0;
+  document.getElementById("btnCheckout").disabled = !hasItems;
+  document.getElementById("btnSplitBill").disabled = !hasItems;
+  document.getElementById("cartFabCount").textContent = cartCount();
+  document.getElementById("cartFabTotal").textContent = fmt(cartTotal());
+}
+
+// ---------- Hold / park order ----------
+function holdCurrentOrder(){
+  if(cart.length===0) return;
+  const label = prompt("给这张挂起的单起个名字(例如桌号/顾客名),留空则自动编号") || "";
+  heldOrders.push({
+    id: uid(),
+    label: label.trim() || ("挂单 " + (heldOrders.length+1)),
+    cart: cart.map(c=>Object.assign({}, c)),
+    discount: discount ? Object.assign({}, discount) : null,
+    heldAt: Date.now()
+  });
+  saveHeldOrders();
+  cart = [];
+  discount = null;
+  activeOrderNo = null;
+  splitGroups = null;
+  renderCart();
+  renderHeldBadge();
+  closeMobileCart();
+  alertToast("已挂单: " + heldOrders[heldOrders.length-1].label);
+}
+
+function renderHeldBadge(){
+  const badge = document.getElementById("heldCountBadge");
+  const btn = document.getElementById("btnHeldOrders");
+  badge.textContent = heldOrders.length;
+  badge.classList.toggle("hidden", heldOrders.length===0);
+  btn.disabled = heldOrders.length===0;
+}
+
+function openHeldOrdersModal(){
+  renderHeldOrdersList();
+  showModal("heldOrdersModal");
+}
+
+function renderHeldOrdersList(){
+  const list = document.getElementById("heldOrdersList");
+  if(heldOrders.length===0){
+    list.innerHTML = `<div class="cart-empty">目前没有挂起的订单</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  heldOrders.forEach(h=>{
+    const sub = h.cart.reduce((s,c)=>s+c.price*c.qty,0);
+    const detail = h.cart.map(c=>`${c.name} x${c.qty}`).join("、");
+    const row = document.createElement("div");
+    row.className = "held-item";
+    row.innerHTML = `
+      <div>
+        <div class="hd-label">${escapeHtml(h.label)} · ${fmt(sub)}</div>
+        <div class="hd-detail">${escapeHtml(detail)}</div>
+      </div>
+      <div class="h-actions">
+        <button class="resume">恢复</button>
+        <button class="void">删除</button>
+      </div>
+    `;
+    row.querySelector(".resume").onclick = ()=> resumeHeldOrder(h.id);
+    row.querySelector(".void").onclick = ()=>{
+      if(confirm(`确定删除挂起的订单「${h.label}」？`)){
+        heldOrders = heldOrders.filter(x=>x.id!==h.id);
+        saveHeldOrders();
+        renderHeldOrdersList();
+        renderHeldBadge();
+      }
+    };
+    list.appendChild(row);
+  });
+}
+
+function resumeHeldOrder(id){
+  if(cart.length>0 && !confirm("当前购物车还有内容,恢复挂单会覆盖现有购物车,确定吗？")) return;
+  const idx = heldOrders.findIndex(h=>h.id===id);
+  if(idx<0) return;
+  const held = heldOrders[idx];
+  cart = held.cart.map(c=>Object.assign({}, c));
+  discount = held.discount ? Object.assign({}, held.discount) : null;
+  activeOrderNo = null;
+  splitGroups = null;
+  heldOrders.splice(idx,1);
+  saveHeldOrders();
+  renderCart();
+  renderHeldBadge();
+  hideModal("heldOrdersModal");
+}
+
+// ---------- Discount ----------
+let discountType = "percent";
+
+function openDiscountModal(){
+  if(cart.length===0) return;
+  document.getElementById("discountPinInput").value = "";
+  document.getElementById("discountPinError").classList.add("hidden");
+  document.getElementById("discountInput").value = discount ? String(discount.value) : "";
+  discountType = discount ? discount.type : "percent";
+  document.querySelectorAll("#discountModal .pay-tab").forEach(b=>b.classList.toggle("active", b.dataset.dtype===discountType));
+  buildDiscountQuick();
+  updateDiscountPreview();
+  if(state.settings.discountPinRequired){
+    document.getElementById("discountPinGate").classList.remove("hidden");
+    document.getElementById("discountBody").classList.add("hidden");
+  }else{
+    document.getElementById("discountPinGate").classList.add("hidden");
+    document.getElementById("discountBody").classList.remove("hidden");
+  }
+  showModal("discountModal");
+}
+
+function buildDiscountQuick(){
+  const box = document.getElementById("discountQuick");
+  box.innerHTML = "";
+  const opts = discountType==="percent" ? [5,10,15,20] : [1,2,5,10];
+  opts.forEach(v=>{
+    const btn = document.createElement("button");
+    btn.textContent = discountType==="percent" ? v+"%" : "RM"+v;
+    btn.onclick = ()=>{ document.getElementById("discountInput").value = v; updateDiscountPreview(); };
+    box.appendChild(btn);
+  });
+}
+
+function updateDiscountPreview(){
+  const val = parseFloat(document.getElementById("discountInput").value) || 0;
+  const sub = cartSubtotal();
+  let amt = discountType==="percent" ? sub*val/100 : val;
+  amt = Math.min(Math.max(amt,0), sub);
+  const discSub = sub - amt;
+  const tax = state.settings.taxEnabled ? discSub*state.settings.taxRate/100 : 0;
+  document.getElementById("discountPreviewTotal").textContent = fmt(discSub+tax);
+}
+
+function applyDiscount(){
+  const val = parseFloat(document.getElementById("discountInput").value) || 0;
+  if(val<=0){ removeDiscount(); hideModal("discountModal"); return; }
+  discount = { type:discountType, value:val };
+  renderCart();
+  hideModal("discountModal");
+}
+function removeDiscount(){
+  discount = null;
+  renderCart();
+}
+
+// ---------- Item notes ----------
+const NOTE_CHIPS = ["不要辣","少辣","加辣","不要葱","不要蒜","走冰","少冰","少甜","少油","多汤","打包外带"];
+let noteEditItemId = null;
+
+function openItemNoteModal(itemId){
+  const line = cart.find(c=>c.itemId===itemId);
+  if(!line) return;
+  noteEditItemId = itemId;
+  document.getElementById("itemNoteTitle").textContent = `${line.name} · 备注`;
+  document.getElementById("itemNoteInput").value = line.note || "";
+  const chipsBox = document.getElementById("noteChips");
+  chipsBox.innerHTML = "";
+  NOTE_CHIPS.forEach(chip=>{
+    const btn = document.createElement("button");
+    btn.textContent = chip;
+    const isActive = (line.note||"").includes(chip);
+    btn.className = isActive ? "active" : "";
+    btn.onclick = ()=>{
+      const input = document.getElementById("itemNoteInput");
+      const parts = input.value.split("、").map(s=>s.trim()).filter(Boolean);
+      const idx = parts.indexOf(chip);
+      if(idx>=0){ parts.splice(idx,1); } else { parts.push(chip); }
+      input.value = parts.join("、");
+      btn.classList.toggle("active");
+    };
+    chipsBox.appendChild(btn);
+  });
+  showModal("itemNoteModal");
+}
+
+function saveItemNote(){
+  const line = cart.find(c=>c.itemId===noteEditItemId);
+  if(line){ line.note = document.getElementById("itemNoteInput").value.trim(); renderCart(); }
+  hideModal("itemNoteModal");
+}
+
+// ---------- Checkout (generalized: full cart OR a split-bill group) ----------
+let currentPayMethod = "cash";
+let checkoutCtx = null; // {label, items, subtotal, discountShare, tax, taxRate, total}
+let currentReceiptOrder = null;
+let activeOrderNo = null;
+let splitGroups = null; // array of {label, lines:[{itemId,name,price,qty}], subtotal, discountShare, tax, total, paid}
+
+function buildFullCartCtx(){
+  return {
+    label: null,
+    items: cart.map(c=>({name:c.name, price:c.price, qty:c.qty, note:c.note||""})),
+    subtotal: cartSubtotal(),
+    discountShare: discountAmount(),
+    tax: cartTax(),
+    taxRate: state.settings.taxEnabled ? state.settings.taxRate : 0,
+    total: cartTotal()
+  };
+}
+
+function openCheckout(ctx){
+  if(cart.length===0) return;
+  if(activeOrderNo===null) activeOrderNo = peekOrderNo();
+  checkoutCtx = ctx || buildFullCartCtx();
+  checkoutCtx.cashDue = roundToNickel(checkoutCtx.total);
+  document.getElementById("dueAmount").textContent = fmt(checkoutCtx.cashDue);
+  document.getElementById("dueAmountQr").textContent = fmt(checkoutCtx.total);
+  const roundNote = document.getElementById("cashRoundingNote");
+  if(Math.abs(checkoutCtx.cashDue - checkoutCtx.total) >= 0.001){
+    roundNote.textContent = `现金四舍五入至最近5分 (原价 ${fmt(checkoutCtx.total)})`;
+    roundNote.classList.remove("hidden");
+  }else{
+    roundNote.classList.add("hidden");
+  }
+  document.getElementById("cashReceived").value = "";
+  document.getElementById("changeVal").textContent = fmt(0);
+  document.getElementById("btnConfirmCash").disabled = true;
+  buildQuickAmounts();
+  switchPayTab("cash");
+  const qrImg = document.getElementById("qrImage");
+  if(state.settings.qrImage){
+    qrImg.src = state.settings.qrImage;
+    qrImg.style.display = "block";
+    document.getElementById("qrHint").textContent = "出示二维码给顾客扫描付款";
+  }else{
+    qrImg.style.display = "none";
+    document.getElementById("qrHint").textContent = "尚未设置收款二维码,请到「设置」上传";
+  }
+  showModal("checkoutModal");
+}
+
+function switchPayTab(method){
+  currentPayMethod = method;
+  document.querySelectorAll("#checkoutModal .pay-tab").forEach(b=>b.classList.toggle("active", b.dataset.method===method));
+  document.getElementById("payCash").classList.toggle("hidden", method!=="cash");
+  document.getElementById("payQr").classList.toggle("hidden", method!=="qr");
+}
+
+function buildQuickAmounts(){
+  const total = checkoutCtx.cashDue;
+  const box = document.getElementById("quickAmounts");
+  box.innerHTML = "";
+  const exact = { label:"刚好", value: total };
+  const roundUps = [10,20,50,100].map(v=>({label:"RM"+v, value:v}))
+    .filter(o=>o.value >= total);
+  const opts = [exact, ...roundUps].slice(0,4);
+  const seen = new Set();
+  opts.forEach(o=>{
+    const key = o.value.toFixed(2);
+    if(seen.has(key)) return;
+    seen.add(key);
+    const btn = document.createElement("button");
+    btn.textContent = o.label;
+    btn.onclick = ()=>{
+      document.getElementById("cashReceived").value = o.value.toFixed(2);
+      updateChange();
+    };
+    box.appendChild(btn);
+  });
+}
+
+function updateChange(){
+  const received = parseFloat(document.getElementById("cashReceived").value) || 0;
+  const total = checkoutCtx.cashDue;
+  const change = received - total;
+  const changeEl = document.getElementById("changeVal");
+  changeEl.textContent = fmt(Math.abs(change));
+  changeEl.classList.toggle("negative", change < -0.001);
+  document.getElementById("btnConfirmCash").disabled = received + 0.001 < total;
+}
+
+function finalizeOrder(paymentMethod, extra){
+  const ctx = checkoutCtx;
+  const orderNo = activeOrderNo + (ctx.label ? "-"+ctx.label : "");
+  const finalTotal = paymentMethod==="cash" ? ctx.cashDue : ctx.total;
+  const order = {
+    orderNo,
+    date: todayStr(),
+    time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}),
+    items: ctx.items,
+    subtotal: ctx.subtotal,
+    discount: ctx.discountShare,
+    tax: ctx.tax,
+    taxRate: ctx.taxRate,
+    total: finalTotal,
+    roundingAdj: paymentMethod==="cash" ? round2(finalTotal - ctx.total) : 0,
+    paymentMethod,
+    cashReceived: extra && extra.cashReceived,
+    change: extra && extra.change,
+    isSplit: !!ctx.label,
+    splitKind: ctx.splitKind || null,
+    voided: false
+  };
+  history.unshift(order);
+  saveHistory();
+  hideModal("checkoutModal");
+
+  if(splitGroups){
+    const grp = splitGroups.find(g=>g.label===ctx.label);
+    if(grp) grp.paid = true;
+    const allPaid = splitGroups.every(g=>g.paid);
+    hideModal("splitPayModal");
+    showReceipt(order, !allPaid);
+    if(allPaid){
+      state.nextOrderSeq++;
+      saveState();
+      clearCart();
+    }
+  }else{
+    state.nextOrderSeq++;
+    saveState();
+    showReceipt(order, false);
+    maybeAutoPrintKitchen(order.orderNo, order.items);
+    clearCart();
+    closeMobileCart();
+  }
+}
+
+function maybeAutoPrintKitchen(orderNo, items){
+  if(!(state.settings.autoPrintKitchen && btPrinterChar)) return;
+  printKitchenTicketBT({ orderNo, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items });
+}
+
+function showReceipt(order, returnToSplitList){
+  const el = document.getElementById("receiptContent");
+  const isEqualSplit = order.isSplit && order.splitKind==="equal";
+  const itemsBlock = isEqualSplit
+    ? `<p class="hint" style="text-align:left;margin:0 0 8px;">均分账单 · 整单内容: ${order.items.map(it=>escapeHtml(it.name)+" x"+it.qty).join("、")}</p><hr>`
+    : `${order.items.map(it=>`
+        <div class="r-line"><span>${escapeHtml(it.name)} x${it.qty}${it.note?` <i style="color:var(--brand);font-style:normal;">(${escapeHtml(it.note)})</i>`:""}</span><span>${fmt(it.price*it.qty)}</span></div>
+      `).join("")}<hr>`;
+  el.innerHTML = `
+    <div class="r-shop">${escapeHtml(state.settings.shopName)}</div>
+    <div class="r-meta">订单 ${order.orderNo} · ${order.date} ${order.time}</div>
+    <hr>
+    ${itemsBlock}
+    <div class="r-line"><span>${isEqualSplit ? "本账单应付 (均分)" : "小计"}</span><span>${fmt(order.subtotal)}</span></div>
+    ${order.discount>0?`<div class="r-line"><span>折扣</span><span>-${fmt(order.discount)}</span></div>`:""}
+    ${order.tax>0?`<div class="r-line"><span>服务税 (${order.taxRate}%)</span><span>${fmt(order.tax)}</span></div>`:""}
+    ${order.roundingAdj?`<div class="r-line"><span>现金四舍五入</span><span>${order.roundingAdj>0?"+"+fmt(order.roundingAdj):"-"+fmt(Math.abs(order.roundingAdj))}</span></div>`:""}
+    <div class="r-line r-total"><span>总计</span><span>${fmt(order.total)}</span></div>
+    <div class="r-line"><span>付款方式</span><span>${order.paymentMethod==="cash"?"现金":"DuitNow / 电子钱包"}</span></div>
+    ${order.paymentMethod==="cash"?`
+      <div class="r-line"><span>实收</span><span>${fmt(order.cashReceived)}</span></div>
+      <div class="r-line"><span>找零</span><span>${fmt(order.change)}</span></div>
+    `:""}
+  `;
+  document.getElementById("btnNewOrder").dataset.returnSplit = returnToSplitList ? "1" : "";
+  currentReceiptOrder = order;
+  showModal("receiptModal");
+}
+
+// ---------- Generic PIN confirm ----------
+let pinConfirmCallback = null;
+function requestPinConfirm(title, callback){
+  pinConfirmCallback = callback;
+  document.getElementById("pinConfirmTitle").textContent = title;
+  document.getElementById("pinConfirmInput").value = "";
+  document.getElementById("pinConfirmError").classList.add("hidden");
+  showModal("pinConfirmModal");
+}
+
+// ---------- History ----------
+function openHistory(){
+  const t = todayStr();
+  const todays = history.filter(o=>o.date===t);
+  const valid = todays.filter(o=>!o.voided);
+  const totalSales = valid.reduce((s,o)=>s+o.total,0);
+  const cashSales = valid.filter(o=>o.paymentMethod==="cash").reduce((s,o)=>s+o.total,0);
+  const qrSales = valid.filter(o=>o.paymentMethod==="qr").reduce((s,o)=>s+o.total,0);
+
+  document.getElementById("historySummary").innerHTML = `
+    <div class="stat">订单数<b>${valid.length}</b></div>
+    <div class="stat">总营业额<b>${fmt(totalSales)}</b></div>
+    <div class="stat">现金<b>${fmt(cashSales)}</b></div>
+    <div class="stat">电子钱包<b>${fmt(qrSales)}</b></div>
+  `;
+
+  const list = document.getElementById("historyList");
+  if(todays.length===0){
+    list.innerHTML = `<div class="cart-empty">今天还没有订单</div>`;
+  }else{
+    list.innerHTML = "";
+    todays.forEach(o=>{
+      const row = document.createElement("div");
+      row.className = "history-item" + (o.voided ? " voided" : "");
+      row.innerHTML = `
+        <div>
+          <div class="h-no">${o.orderNo} · ${fmt(o.total)}</div>
+          <div class="h-method">${o.time} · ${o.paymentMethod==="cash"?"现金":"电子钱包"}${o.isSplit?" · 分单":""}</div>
+        </div>
+        ${o.voided ? `<span class="h-voided-tag">已作废</span>` : `
+          <div class="h-actions">
+            <button class="reopen">重开</button>
+            <button class="void">作废</button>
+          </div>
+        `}
+      `;
+      if(!o.voided){
+        row.querySelector(".reopen").onclick = ()=> reopenOrder(o.orderNo);
+        row.querySelector(".void").onclick = ()=> voidOrder(o.orderNo);
+      }
+      list.appendChild(row);
+    });
+  }
+  showModal("historyModal");
+}
+
+function voidOrder(orderNo){
+  requestPinConfirm(`作废订单 ${orderNo}`, ()=>{
+    const ord = history.find(o=>o.orderNo===orderNo);
+    if(!ord) return;
+    if(!confirm(`确定作废订单 ${orderNo} (${fmt(ord.total)})？此操作会保留记录但不计入今日营业额。`)) return;
+    ord.voided = true;
+    saveHistory();
+    openHistory();
+    alertToast("订单已作废");
+  });
+}
+
+function reopenOrder(orderNo){
+  requestPinConfirm(`重开订单 ${orderNo} 到购物车`, ()=>{
+    const ord = history.find(o=>o.orderNo===orderNo);
+    if(!ord) return;
+    if(cart.length>0 && !confirm("当前购物车还有内容,重开此单会覆盖现有购物车,确定吗？")) return;
+    cart = ord.items.map(it=>({ itemId: uid(), name: it.name, price: it.price, qty: it.qty, note: it.note||"" }));
+    discount = null;
+    activeOrderNo = null;
+    splitGroups = null;
+    renderCart();
+    hideModal("historyModal");
+    alertToast("已把该订单内容放入购物车,请核实后重新结账");
+  });
+}
+
+// ---------- Split bill ----------
+let splitMode = "equal";
+let splitEqualN = 2;
+let splitUnits = null; // [{unitKey,itemId,name,price}]
+let splitUnitAssign = {}; // unitKey -> groupIndex
+let splitDraftGroups = []; // [{label}]
+let activeSplitGroupIdx = 0;
+
+function openSplitModal(){
+  if(cart.length===0) return;
+  splitMode = "equal";
+  splitEqualN = 2;
+  document.querySelectorAll("#splitModal .pay-tab").forEach(b=>b.classList.toggle("active", b.dataset.split==="equal"));
+  document.getElementById("splitEqual").classList.remove("hidden");
+  document.getElementById("splitItems").classList.add("hidden");
+  renderSplitEqual();
+  buildSplitUnits();
+  splitDraftGroups = [{label:"A"},{label:"B"}];
+  activeSplitGroupIdx = 0;
+  renderSplitItems();
+  showModal("splitModal");
+}
+
+function switchSplitMode(mode){
+  splitMode = mode;
+  document.querySelectorAll("#splitModal .pay-tab").forEach(b=>b.classList.toggle("active", b.dataset.split===mode));
+  document.getElementById("splitEqual").classList.toggle("hidden", mode!=="equal");
+  document.getElementById("splitItems").classList.toggle("hidden", mode!=="items");
+}
+
+function renderSplitEqual(){
+  const box = document.getElementById("splitEqualCount");
+  box.innerHTML = "";
+  [2,3,4,5,6].forEach(n=>{
+    const btn = document.createElement("button");
+    btn.textContent = n + " 人";
+    btn.className = n===splitEqualN ? "active" : "";
+    if(n===splitEqualN){ btn.style.background="var(--brand)"; btn.style.color="#fff"; btn.style.borderColor="var(--brand)"; }
+    btn.onclick = ()=>{ splitEqualN = n; renderSplitEqual(); };
+    box.appendChild(btn);
+  });
+
+  const shares = computeEqualShares(splitEqualN);
+  const prev = document.getElementById("splitEqualPreview");
+  prev.innerHTML = shares.map((s,i)=>`<div class="sp-row"><span>第 ${i+1} 份</span><span>${fmt(s)}</span></div>`).join("");
+}
+
+function computeEqualShares(n){
+  const total = cartTotal();
+  const base = Math.floor((total/n)*100)/100;
+  const shares = new Array(n).fill(base);
+  let remainder = round2(total - base*n);
+  let i = 0;
+  while(remainder > 0.001 && i < n){
+    shares[i] = round2(shares[i] + 0.01);
+    remainder = round2(remainder - 0.01);
+    i++;
+  }
+  return shares;
+}
+
+function buildSplitUnits(){
+  splitUnits = [];
+  cart.forEach(line=>{
+    for(let i=0;i<line.qty;i++){
+      splitUnits.push({ unitKey: line.itemId+"_"+i, itemId: line.itemId, name: line.name, price: line.price, note: line.note||"" });
+    }
+  });
+  splitUnitAssign = {};
+}
+
+function renderSplitItems(){
+  const tabsBox = document.getElementById("splitGroupTabs");
+  tabsBox.innerHTML = "";
+  splitDraftGroups.forEach((g, idx)=>{
+    const sub = splitUnits.filter(u=>splitUnitAssign[u.unitKey]===idx).reduce((s,u)=>s+u.price,0);
+    const btn = document.createElement("button");
+    btn.className = "split-group-tab" + (idx===activeSplitGroupIdx?" active":"");
+    btn.textContent = `账单 ${g.label} (${fmt(sub)})`;
+    btn.onclick = ()=>{ activeSplitGroupIdx = idx; renderSplitItems(); };
+    tabsBox.appendChild(btn);
+  });
+
+  const list = document.getElementById("splitItemList");
+  list.innerHTML = "";
+  splitUnits.forEach(u=>{
+    const assignedIdx = splitUnitAssign[u.unitKey];
+    const row = document.createElement("div");
+    row.className = "split-unit-row" + (assignedIdx!==undefined ? " assigned" : "");
+    const badgeText = assignedIdx!==undefined ? splitDraftGroups[assignedIdx].label : "未分配";
+    row.innerHTML = `
+      <div>
+        <div class="su-name">${escapeHtml(u.name)}</div>
+        <div class="su-price">${fmt(u.price)}</div>
+      </div>
+      <span class="su-badge">${badgeText}</span>
+    `;
+    row.onclick = ()=>{
+      if(splitUnitAssign[u.unitKey]===activeSplitGroupIdx){
+        delete splitUnitAssign[u.unitKey];
+      }else{
+        splitUnitAssign[u.unitKey] = activeSplitGroupIdx;
+      }
+      renderSplitItems();
+    };
+    list.appendChild(row);
+  });
+
+  const unassignedCount = splitUnits.filter(u=>splitUnitAssign[u.unitKey]===undefined).length;
+  document.getElementById("splitItemsHint").textContent = unassignedCount>0
+    ? `点选账单标签,再点菜品分配 · 还有 ${unassignedCount} 项未分配`
+    : `全部菜品已分配完毕`;
+}
+
+function addSplitGroup(){
+  const nextLetter = String.fromCharCode(65 + splitDraftGroups.length);
+  if(splitDraftGroups.length>=8) return;
+  splitDraftGroups.push({label: nextLetter});
+  renderSplitItems();
+}
+
+function confirmSplit(){
+  const cartSub = cartSubtotal();
+  const totalDiscount = discountAmount();
+  const taxEnabled = state.settings.taxEnabled;
+  const taxRate = state.settings.taxRate;
+
+  let groups = [];
+  if(splitMode==="equal"){
+    const shares = computeEqualShares(splitEqualN);
+    groups = shares.map((total,i)=>({
+      label: String(i+1),
+      items: cart.map(c=>({name:c.name, price:c.price, qty:c.qty, note:c.note||""})),
+      subtotal: round2(cartSub/splitEqualN),
+      discountShare: round2(totalDiscount/splitEqualN),
+      tax: round2(taxEnabled ? total*taxRate/(100+taxRate) : 0),
+      total,
+      splitKind:"equal"
+    }));
+    // fix rounding on subtotal/discount so components are internally consistent per row (display only)
+  }else{
+    const unassigned = splitUnits.filter(u=>splitUnitAssign[u.unitKey]===undefined);
+    if(unassigned.length>0){
+      alertToast(`还有 ${unassigned.length} 项未分配到账单`);
+      return;
+    }
+    if(splitDraftGroups.length<2){
+      alertToast("至少需要 2 个账单");
+      return;
+    }
+    groups = splitDraftGroups.map((g, idx)=>{
+      const unitsInGroup = splitUnits.filter(u=>splitUnitAssign[u.unitKey]===idx);
+      const groupSub = round2(unitsInGroup.reduce((s,u)=>s+u.price,0));
+      const groupDiscountShare = cartSub>0 ? round2(totalDiscount * (groupSub/cartSub)) : 0;
+      const discSub = groupSub - groupDiscountShare;
+      const tax = taxEnabled ? round2(discSub*taxRate/100) : 0;
+      // aggregate units back into item lines for the receipt
+      const linesMap = {};
+      unitsInGroup.forEach(u=>{
+        if(!linesMap[u.itemId]) linesMap[u.itemId] = {name:u.name, price:u.price, qty:0, note:u.note||""};
+        linesMap[u.itemId].qty++;
+      });
+      return {
+        label: g.label,
+        items: Object.values(linesMap),
+        subtotal: groupSub,
+        discountShare: groupDiscountShare,
+        tax,
+        total: round2(discSub+tax),
+        splitKind:"items"
+      };
+    });
+  }
+
+  // reconcile rounding so the groups sum exactly to cartTotal()
+  const target = round2(cartTotal());
+  const sum = round2(groups.reduce((s,g)=>s+g.total,0));
+  const diff = round2(target - sum);
+  if(Math.abs(diff)>=0.01 && groups.length>0){
+    groups[groups.length-1].total = round2(groups[groups.length-1].total + diff);
+  }
+
+  splitGroups = groups.map(g=>Object.assign({paid:false}, g));
+  activeOrderNo = peekOrderNo();
+  maybeAutoPrintKitchen(activeOrderNo, cart.map(c=>({name:c.name, qty:c.qty, note:c.note||""})));
+  hideModal("splitModal");
+  renderSplitPayList();
+  showModal("splitPayModal");
+}
+
+function renderSplitPayList(){
+  const list = document.getElementById("splitPayList");
+  list.innerHTML = "";
+  splitGroups.forEach(g=>{
+    const row = document.createElement("div");
+    row.className = "split-pay-row";
+    row.innerHTML = `
+      <div>
+        <div class="sp-label">账单 ${g.label}</div>
+        <div class="sp-amt">${fmt(g.total)}</div>
+      </div>
+      ${g.paid ? `<span class="sp-paid">✅ 已结账</span>` : `<button>结账</button>`}
+    `;
+    if(!g.paid){
+      row.querySelector("button").onclick = ()=>{
+        hideModal("splitPayModal");
+        openCheckout({
+          label: g.label,
+          items: g.items,
+          subtotal: g.subtotal,
+          discountShare: g.discountShare,
+          tax: g.tax,
+          taxRate: state.settings.taxEnabled ? state.settings.taxRate : 0,
+          total: g.total,
+          splitKind: g.splitKind
+        });
+      };
+    }
+    list.appendChild(row);
+  });
+}
+
+// ---------- Settings ----------
+function openSettings(){
+  unlockedSettings = false;
+  document.getElementById("pinGate").classList.remove("hidden");
+  document.getElementById("settingsBody").classList.add("hidden");
+  document.getElementById("pinInput").value = "";
+  document.getElementById("pinError").classList.add("hidden");
+  showModal("settingsModal");
+}
+
+function trySubmitPin(){
+  const val = document.getElementById("pinInput").value;
+  if(val === state.settings.pin){
+    unlockedSettings = true;
+    document.getElementById("pinGate").classList.add("hidden");
+    document.getElementById("settingsBody").classList.remove("hidden");
+    populateSettingsForm();
+  }else{
+    document.getElementById("pinError").classList.remove("hidden");
+  }
+}
+
+function populateSettingsForm(){
+  document.getElementById("inputShopName").value = state.settings.shopName;
+  document.getElementById("inputTaxEnabled").checked = state.settings.taxEnabled;
+  document.getElementById("inputTaxRate").value = state.settings.taxRate;
+  document.getElementById("inputDiscountPinRequired").checked = state.settings.discountPinRequired;
+  document.getElementById("inputDeviceLabel").value = state.settings.deviceLabel || "";
+  document.getElementById("inputPaperWidth").value = state.settings.paperWidth || "58";
+  document.getElementById("inputAutoPrintKitchen").checked = state.settings.autoPrintKitchen!==false;
+  document.getElementById("inputNewPin").value = "";
+  updatePrinterStatus();
+  if(!navigator.bluetooth){
+    document.getElementById("btnConnectPrinter").disabled = true;
+    document.getElementById("btnTestPrint").disabled = true;
+    document.getElementById("printerStatus").textContent = "此浏览器不支持蓝牙打印 (iOS/Safari 不支持,请用 Android + Chrome)";
+  }
+  const preview = document.getElementById("qrPreview");
+  if(state.settings.qrImage){
+    preview.src = state.settings.qrImage;
+    preview.classList.remove("hidden");
+  }else{
+    preview.classList.add("hidden");
+  }
+  renderMenuEditor();
+}
+
+function saveGeneralSettings(){
+  state.settings.shopName = document.getElementById("inputShopName").value.trim() || "Soo's Kitchen";
+  state.settings.taxEnabled = document.getElementById("inputTaxEnabled").checked;
+  state.settings.taxRate = parseFloat(document.getElementById("inputTaxRate").value) || 0;
+  state.settings.discountPinRequired = document.getElementById("inputDiscountPinRequired").checked;
+  state.settings.deviceLabel = document.getElementById("inputDeviceLabel").value.trim();
+  state.settings.paperWidth = document.getElementById("inputPaperWidth").value;
+  state.settings.autoPrintKitchen = document.getElementById("inputAutoPrintKitchen").checked;
+  const newPin = document.getElementById("inputNewPin").value.trim();
+  if(newPin.length>=4){ state.settings.pin = newPin; }
+  saveState();
+  document.getElementById("shopName").textContent = state.settings.shopName;
+  renderCart();
+  alertToast("设置已保存");
+}
+
+function handleQrFile(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    state.settings.qrImage = reader.result;
+    saveState();
+    const preview = document.getElementById("qrPreview");
+    preview.src = reader.result;
+    preview.classList.remove("hidden");
+    alertToast("二维码已更新");
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---------- Backup / restore ----------
+function downloadBlob(content, filename, mime){
+  const blob = new Blob([content], {type:mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportBackup(){
+  const payload = { exportedAt: new Date().toISOString(), state, history, heldOrders };
+  downloadBlob(JSON.stringify(payload, null, 2), `soos-kitchen-pos-backup-${todayStr()}.json`, "application/json");
+  alertToast("备份已导出");
+}
+
+function exportHistoryCsv(){
+  const rows = [["订单号","日期","时间","付款方式","小计","折扣","税","总计","是否分单","是否作废"]];
+  history.forEach(o=> rows.push([o.orderNo,o.date,o.time,o.paymentMethod==="cash"?"现金":"电子钱包",o.subtotal,o.discount||0,o.tax||0,o.total,o.isSplit?"是":"否",o.voided?"是":"否"]));
+  const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n");
+  downloadBlob("﻿"+csv, `sales-history-${todayStr()}.csv`, "text/csv;charset=utf-8");
+  alertToast("销售记录已导出");
+}
+
+function importBackup(file){
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    let payload;
+    try{ payload = JSON.parse(e.target.result); }
+    catch(err){ alertToast("文件格式错误,无法导入"); return; }
+    if(!payload || !payload.state || !payload.state.menu){ alertToast("文件内容不完整,无法导入"); return; }
+    if(!confirm("导入备份会覆盖现有的菜单、设置与销售记录,确定要继续吗？")) return;
+    state = Object.assign(structuredClone(DEFAULT_STATE), payload.state, {
+      settings: Object.assign({}, DEFAULT_STATE.settings, payload.state.settings||{})
+    });
+    history = Array.isArray(payload.history) ? payload.history : [];
+    heldOrders = Array.isArray(payload.heldOrders) ? payload.heldOrders : [];
+    saveState(); saveHistory(); saveHeldOrders();
+    activeCategory = state.menu[0] ? state.menu[0].id : null;
+    document.getElementById("shopName").textContent = state.settings.shopName;
+    renderCategoryTabs(); renderItemGrid(); renderCart(); renderHeldBadge();
+    populateSettingsForm();
+    alertToast("备份已还原");
+  };
+  reader.readAsText(file);
+}
+
+// ---------- Bluetooth thermal printer ----------
+const PRINTER_SERVICE_CANDIDATES = [
+  "000018f0-0000-1000-8000-00805f9b34fb",
+  "49535343-fe7d-4ae5-8fa9-9fafd205e455",
+  "0000ff00-0000-1000-8000-00805f9b34fb",
+  "0000ffe0-0000-1000-8000-00805f9b34fb"
+];
+let btPrinterDevice = null;
+let btPrinterChar = null;
+
+function updatePrinterStatus(){
+  const el = document.getElementById("printerStatus");
+  if(!el) return;
+  if(btPrinterChar){
+    el.textContent = "已连接: " + (btPrinterDevice && btPrinterDevice.name ? btPrinterDevice.name : "蓝牙打印机");
+  }else{
+    el.textContent = "尚未连接打印机";
+  }
+}
+
+async function connectBluetoothPrinter(){
+  if(!navigator.bluetooth){
+    alertToast("此浏览器不支持蓝牙打印,需要 Android 手机/平板上的 Chrome 浏览器");
+    return;
+  }
+  try{
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: PRINTER_SERVICE_CANDIDATES
+    });
+    const server = await device.gatt.connect();
+    let writableChar = null;
+
+    for(const svcUuid of PRINTER_SERVICE_CANDIDATES){
+      try{
+        const service = await server.getPrimaryService(svcUuid);
+        const chars = await service.getCharacteristics();
+        writableChar = chars.find(c=>c.properties.write || c.properties.writeWithoutResponse);
+        if(writableChar) break;
+      }catch(e){ /* this service isn't on this device, try next candidate */ }
+    }
+    if(!writableChar){
+      try{
+        const services = await server.getPrimaryServices();
+        for(const service of services){
+          const chars = await service.getCharacteristics();
+          writableChar = chars.find(c=>c.properties.write || c.properties.writeWithoutResponse);
+          if(writableChar) break;
+        }
+      }catch(e){ /* some devices refuse to enumerate all services */ }
+    }
+    if(!writableChar) throw new Error("找不到可写入的蓝牙通道,此打印机可能不兼容 Web Bluetooth");
+
+    btPrinterDevice = device;
+    btPrinterChar = writableChar;
+    device.addEventListener("gattserverdisconnected", ()=>{
+      btPrinterChar = null;
+      updatePrinterStatus();
+      alertToast("打印机已断开连接");
+    });
+    updatePrinterStatus();
+    alertToast("打印机已连接: " + (device.name||"未知设备"));
+  }catch(err){
+    if(err && err.name==="NotFoundError") return; // user cancelled the device picker
+    alertToast("连接失败: " + (err && err.message ? err.message : err));
+  }
+}
+
+async function sendBytesToPrinter(bytes){
+  if(!btPrinterChar) throw new Error("打印机未连接");
+  const CHUNK = 180;
+  for(let i=0;i<bytes.length;i+=CHUNK){
+    const chunk = bytes.slice(i, i+CHUNK);
+    if(btPrinterChar.properties.writeWithoutResponse){
+      await btPrinterChar.writeValueWithoutResponse(chunk);
+    }else{
+      await btPrinterChar.writeValue(chunk);
+    }
+    await new Promise(r=>setTimeout(r, 20));
+  }
+}
+
+function paperWidthPx(){
+  return state.settings.paperWidth==="80" ? 576 : 384;
+}
+
+// Renders lines of text to a canvas, then converts to an ESC/POS raster bit-image and sends it.
+// Rendering as an image (rather than sending encoded text) avoids codepage/Chinese-character
+// compatibility issues that vary across cheap thermal-printer clones.
+function renderTicketCanvas(blocks){
+  const width = paperWidthPx();
+  const lineHeight = 30;
+  const measureCanvas = document.createElement("canvas");
+  const mctx = measureCanvas.getContext("2d");
+  let totalHeight = 20;
+  const wrapped = [];
+  blocks.forEach(b=>{
+    const size = b.size==="lg" ? 26 : b.size==="sm" ? 16 : 20;
+    const weight = b.bold ? "700" : "400";
+    mctx.font = `${weight} ${size}px "Microsoft YaHei","PingFang SC",sans-serif`;
+    const maxW = width - 24;
+    const words = (b.text||"").split("");
+    let line = "";
+    const linesForBlock = [];
+    words.forEach(ch=>{
+      const test = line + ch;
+      if(mctx.measureText(test).width > maxW && line){
+        linesForBlock.push(line);
+        line = ch;
+      }else{
+        line = test;
+      }
+    });
+    linesForBlock.push(line);
+    linesForBlock.forEach(l=>{
+      wrapped.push({ text:l, size, weight, align: b.align||"left" });
+      totalHeight += size + 10;
+    });
+    if(b.spacingAfter) totalHeight += b.spacingAfter;
+  });
+  totalHeight += 30;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = totalHeight;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0,0,width,totalHeight);
+  ctx.fillStyle = "#000";
+  ctx.textBaseline = "top";
+
+  let y = 16;
+  let bi = 0, consumed = 0;
+  for(let i=0;i<wrapped.length;i++){
+    const w = wrapped[i];
+    ctx.font = `${w.weight} ${w.size}px "Microsoft YaHei","PingFang SC",sans-serif`;
+    const tw = ctx.measureText(w.text).width;
+    let x = 12;
+    if(w.align==="center") x = Math.max(12, (width-tw)/2);
+    else if(w.align==="right") x = Math.max(12, width-tw-12);
+    ctx.fillText(w.text, x, y);
+    y += w.size + 10;
+  }
+  return canvas;
+}
+
+function canvasToEscPosRaster(canvas){
+  const ctx = canvas.getContext("2d");
+  const { width, height } = canvas;
+  const img = ctx.getImageData(0,0,width,height).data;
+  const bytesPerRow = Math.ceil(width/8);
+  const raster = new Uint8Array(bytesPerRow*height);
+  for(let y=0;y<height;y++){
+    for(let x=0;x<width;x++){
+      const idx = (y*width+x)*4;
+      const lum = 0.299*img[idx] + 0.587*img[idx+1] + 0.114*img[idx+2];
+      const isBlack = lum < 180;
+      if(isBlack){
+        raster[y*bytesPerRow + (x>>3)] |= (0x80 >> (x%8));
+      }
+    }
+  }
+  const header = new Uint8Array([
+    0x1D,0x76,0x30,0x00,
+    bytesPerRow & 0xFF, (bytesPerRow>>8) & 0xFF,
+    height & 0xFF, (height>>8) & 0xFF
+  ]);
+  const out = new Uint8Array(header.length + raster.length);
+  out.set(header,0);
+  out.set(raster, header.length);
+  return out;
+}
+
+const ESC_INIT = new Uint8Array([0x1B,0x40]);
+const ESC_FEED_CUT = new Uint8Array([0x0A,0x0A,0x0A,0x0A,0x1D,0x56,0x00]);
+
+async function printBlocks(blocks){
+  if(!btPrinterChar){
+    alertToast("请先在设置里连接蓝牙打印机");
+    return false;
+  }
+  try{
+    const canvas = renderTicketCanvas(blocks);
+    const raster = canvasToEscPosRaster(canvas);
+    const payload = new Uint8Array(ESC_INIT.length + raster.length + ESC_FEED_CUT.length);
+    payload.set(ESC_INIT,0);
+    payload.set(raster, ESC_INIT.length);
+    payload.set(ESC_FEED_CUT, ESC_INIT.length+raster.length);
+    await sendBytesToPrinter(payload);
+    return true;
+  }catch(err){
+    alertToast("打印失败: " + (err && err.message ? err.message : err));
+    return false;
+  }
+}
+
+function testPrint(){
+  printBlocks([
+    { text: state.settings.shopName, size:"lg", bold:true, align:"center" },
+    { text: "打印测试页", align:"center", spacingAfter:10 },
+    { text: new Date().toLocaleString("en-MY"), size:"sm", align:"center", spacingAfter:10 },
+    { text: "如果这张纸能正常打印出来,", align:"left" },
+    { text: "说明打印机已经连接成功。", align:"left" }
+  ]);
+}
+
+function receiptToPrintBlocks(order){
+  const blocks = [];
+  blocks.push({ text: state.settings.shopName, size:"lg", bold:true, align:"center" });
+  blocks.push({ text: `订单 ${order.orderNo}`, bold:true, align:"center" });
+  blocks.push({ text: `${order.date} ${order.time}`, size:"sm", align:"center", spacingAfter:10 });
+  order.items.forEach(it=>{
+    blocks.push({ text: `${it.name} x${it.qty}${it.note?" ("+it.note+")":""}` });
+    blocks.push({ text: `  ${fmt(it.price*it.qty)}`, align:"right" });
+  });
+  blocks.push({ text: "--------------------------------", spacingAfter:4 });
+  blocks.push({ text: `小计  ${fmt(order.subtotal)}`, align:"right" });
+  if(order.discount>0) blocks.push({ text: `折扣  -${fmt(order.discount)}`, align:"right" });
+  if(order.tax>0) blocks.push({ text: `服务税  ${fmt(order.tax)}`, align:"right" });
+  if(order.roundingAdj) blocks.push({ text: `四舍五入  ${order.roundingAdj>0?"+":"-"}${fmt(Math.abs(order.roundingAdj))}`, align:"right" });
+  blocks.push({ text: `总计  ${fmt(order.total)}`, bold:true, size:"lg", align:"right", spacingAfter:6 });
+  blocks.push({ text: `付款方式: ${order.paymentMethod==="cash"?"现金":"DuitNow/电子钱包"}` });
+  if(order.paymentMethod==="cash"){
+    blocks.push({ text: `实收 ${fmt(order.cashReceived)}  找零 ${fmt(order.change)}` });
+  }
+  blocks.push({ text: "谢谢惠顾 Thank You", align:"center", spacingAfter:6 });
+  return blocks;
+}
+
+function kitchenTicketToPrintBlocks(order){
+  const blocks = [];
+  blocks.push({ text: `订单 ${order.orderNo}`, size:"lg", bold:true, align:"center" });
+  blocks.push({ text: `${order.time}`, size:"sm", align:"center", spacingAfter:10 });
+  order.items.forEach(it=>{
+    blocks.push({ text: `${it.name}  x${it.qty}`, size:"lg", bold:true });
+    if(it.note) blocks.push({ text: `>> ${it.note}`, bold:true });
+  });
+  blocks.push({ text: "" , spacingAfter:6});
+  return blocks;
+}
+
+function printReceiptBT(order){ return printBlocks(receiptToPrintBlocks(order)); }
+function printKitchenTicketBT(order){ return printBlocks(kitchenTicketToPrintBlocks(order)); }
+
+function resizeImageFile(file, maxSize, quality, callback){
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      let w = img.width, h = img.height;
+      const scale = Math.min(1, maxSize/Math.max(w,h));
+      w = Math.round(w*scale); h = Math.round(h*scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      callback(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---------- Menu editor ----------
+function uid(){ return "id" + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+
+function renderMenuEditor(){
+  const container = document.getElementById("categoryEditorList");
+  container.innerHTML = "";
+  state.menu.forEach(cat=>{
+    const box = document.createElement("div");
+    box.className = "cat-editor";
+    box.innerHTML = `
+      <div class="cat-editor-head">
+        <input type="text" value="${escapeHtml(cat.name)}" data-cat="${cat.id}" class="cat-name-input">
+        <button data-act="delcat" data-cat="${cat.id}">🗑</button>
+      </div>
+      <div class="item-editor-list" data-list="${cat.id}"></div>
+      <button class="add-item-btn" data-act="additem" data-cat="${cat.id}">+ 新增菜品</button>
+    `;
+    container.appendChild(box);
+
+    const list = box.querySelector(`[data-list="${cat.id}"]`);
+    cat.items.forEach(item=>{
+      const row = document.createElement("div");
+      row.className = "item-editor-row";
+      const photoInner = item.image ? `<img src="${item.image}" alt="">` : `<span>📷</span>`;
+      row.innerHTML = `
+        <div class="ie-photo">${photoInner}</div>
+        <input type="file" accept="image/*" class="ie-photo-input hidden">
+        <div class="ie-fields">
+          <div class="ie-line1">
+            <input type="text" value="${escapeHtml(item.name)}" placeholder="菜品名称">
+            <button data-act="delitem">🗑</button>
+          </div>
+          <div class="ie-line2">
+            <button class="avail-toggle" title="上架/售罄">${item.available===false?"🚫":"✅"}</button>
+            <input type="number" step="0.10" min="0" value="${item.price}" placeholder="价格">
+          </div>
+        </div>
+      `;
+      const photoBtn = row.querySelector(".ie-photo");
+      const photoInput = row.querySelector(".ie-photo-input");
+      const nameInput = row.querySelector('input[type="text"]');
+      const priceInput = row.querySelector('input[type="number"]');
+      const availBtn = row.querySelector(".avail-toggle");
+      const delBtn = row.querySelector('[data-act="delitem"]');
+
+      photoBtn.onclick = ()=> photoInput.click();
+      photoInput.onchange = (e)=>{
+        const file = e.target.files[0];
+        if(!file) return;
+        resizeImageFile(file, 400, 0.75, dataUrl=>{
+          item.image = dataUrl;
+          saveState(); renderMenuEditor(); renderItemGridIfNeeded();
+        });
+      };
+      availBtn.onclick = ()=>{
+        item.available = item.available===false ? true : false;
+        saveState(); renderMenuEditor(); renderItemGridIfNeeded();
+      };
+      nameInput.onchange = ()=>{ item.name = nameInput.value.trim()||item.name; saveState(); renderItemGridIfNeeded(); };
+      priceInput.onchange = ()=>{ item.price = parseFloat(priceInput.value)||0; saveState(); renderItemGridIfNeeded(); };
+      delBtn.onclick = ()=>{
+        cat.items = cat.items.filter(i=>i.id!==item.id);
+        saveState(); renderMenuEditor(); renderItemGridIfNeeded();
+      };
+      list.appendChild(row);
+    });
+
+    box.querySelector('[data-act="delcat"]').onclick = ()=>{
+      if(!confirm(`确定删除分类「${cat.name}」及其所有菜品?`)) return;
+      state.menu = state.menu.filter(c=>c.id!==cat.id);
+      if(activeCategory===cat.id){ activeCategory = state.menu[0]?state.menu[0].id:null; }
+      saveState(); renderMenuEditor(); renderCategoryTabs(); renderItemGrid();
+    };
+    box.querySelector('[data-act="additem"]').onclick = ()=>{
+      cat.items.push({ id:uid(), name:"新菜品", price:0, available:true, image:"" });
+      saveState(); renderMenuEditor(); renderItemGridIfNeeded();
+    };
+    box.querySelector(".cat-name-input").onchange = (e)=>{
+      cat.name = e.target.value.trim() || cat.name;
+      saveState(); renderMenuEditor(); renderCategoryTabs();
+    };
+  });
+}
+
+function renderItemGridIfNeeded(){
+  renderCategoryTabs();
+  renderItemGrid();
+}
+
+function addCategory(){
+  const cat = { id:uid(), name:"新分类", items:[] };
+  state.menu.push(cat);
+  if(!activeCategory) activeCategory = cat.id;
+  saveState();
+  renderMenuEditor();
+  renderCategoryTabs();
+}
+
+// ---------- Modal helpers ----------
+function showModal(id){ document.getElementById(id).classList.remove("hidden"); }
+function hideModal(id){ document.getElementById(id).classList.add("hidden"); }
+
+function alertToast(msg){
+  const el = document.createElement("div");
+  el.textContent = msg;
+  el.style.cssText = "position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#2b2118;color:#fff;padding:10px 18px;border-radius:20px;font-size:14px;z-index:99;opacity:0.95;";
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(), 1600);
+}
+
+// ---------- Mobile cart drawer ----------
+function toggleMobileCart(){
+  document.getElementById("cartPane").classList.toggle("open");
+}
+function closeMobileCart(){
+  document.getElementById("cartPane").classList.remove("open");
+}
+
+// ---------- Clock ----------
+function tickClock(){
+  const el = document.getElementById("clock");
+  const d = new Date();
+  el.textContent = d.toLocaleDateString("en-MY",{weekday:"short",year:"numeric",month:"short",day:"numeric"}) + " " +
+    d.toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"});
+}
+
+// ---------- Wire up events ----------
+function init(){
+  document.getElementById("shopName").textContent = state.settings.shopName;
+  ensureOrderSeq();
+  renderCategoryTabs();
+  renderItemGrid();
+  renderCart();
+  renderHeldBadge();
+  tickClock();
+  setInterval(tickClock, 15000);
+
+  document.getElementById("btnClearCart").onclick = ()=>{
+    if(cart.length===0) return;
+    if(confirm("确定清空当前订单?")) clearCart();
+  };
+  document.getElementById("btnCheckout").onclick = ()=> openCheckout(null);
+  document.getElementById("btnCartMobile").onclick = toggleMobileCart;
+  document.getElementById("btnHoldOrder").onclick = holdCurrentOrder;
+  document.getElementById("btnHeldOrders").onclick = openHeldOrdersModal;
+
+  document.getElementById("btnSaveNote").onclick = saveItemNote;
+
+  document.getElementById("btnPinConfirmSubmit").onclick = ()=>{
+    const val = document.getElementById("pinConfirmInput").value;
+    if(val === state.settings.pin){
+      hideModal("pinConfirmModal");
+      const cb = pinConfirmCallback;
+      pinConfirmCallback = null;
+      if(cb) cb();
+    }else{
+      document.getElementById("pinConfirmError").classList.remove("hidden");
+    }
+  };
+
+  document.getElementById("btnExportBackup").onclick = exportBackup;
+  document.getElementById("btnExportCsv").onclick = exportHistoryCsv;
+  document.getElementById("inputImportBackup").addEventListener("change", (e)=>{
+    const file = e.target.files[0];
+    if(file) importBackup(file);
+    e.target.value = "";
+  });
+
+  document.querySelectorAll("#checkoutModal .pay-tab").forEach(btn=>{
+    btn.onclick = ()=> switchPayTab(btn.dataset.method);
+  });
+  document.getElementById("cashReceived").addEventListener("input", updateChange);
+  document.getElementById("btnConfirmCash").onclick = ()=>{
+    const received = parseFloat(document.getElementById("cashReceived").value) || 0;
+    const total = checkoutCtx.cashDue;
+    if(received + 0.001 < total) return;
+    finalizeOrder("cash", { cashReceived:received, change: round2(received-total) });
+  };
+  document.getElementById("btnConfirmQr").onclick = ()=>{
+    finalizeOrder("qr", {});
+  };
+
+  document.getElementById("btnHistory").onclick = openHistory;
+  document.getElementById("btnSettings").onclick = openSettings;
+  document.getElementById("btnPinSubmit").onclick = trySubmitPin;
+  document.getElementById("pinInput").addEventListener("keydown", e=>{ if(e.key==="Enter") trySubmitPin(); });
+
+  document.querySelectorAll("[data-close]").forEach(btn=>{
+    btn.onclick = ()=>{
+      hideModal(btn.dataset.close);
+      if(btn.dataset.close==="checkoutModal" && splitGroups && checkoutCtx && checkoutCtx.label){
+        renderSplitPayList();
+        showModal("splitPayModal");
+      }
+    };
+  });
+  document.getElementById("btnNewOrder").onclick = ()=>{
+    const returnSplit = document.getElementById("btnNewOrder").dataset.returnSplit === "1";
+    hideModal("receiptModal");
+    if(returnSplit){ renderSplitPayList(); showModal("splitPayModal"); }
+  };
+  document.getElementById("btnPrintReceipt").onclick = ()=>{
+    if(btPrinterChar && currentReceiptOrder){ printReceiptBT(currentReceiptOrder); }
+    else{ window.print(); }
+  };
+  document.getElementById("btnPrintKitchen").onclick = ()=>{
+    if(!currentReceiptOrder) return;
+    printKitchenTicketBT(currentReceiptOrder);
+  };
+  document.getElementById("btnConnectPrinter").onclick = connectBluetoothPrinter;
+  document.getElementById("btnTestPrint").onclick = testPrint;
+
+  document.querySelectorAll(".settings-tab").forEach(tab=>{
+    tab.onclick = ()=>{
+      document.querySelectorAll(".settings-tab").forEach(t=>t.classList.toggle("active", t===tab));
+      document.getElementById("tabGeneral").classList.toggle("hidden", tab.dataset.tab!=="general");
+      document.getElementById("tabMenu").classList.toggle("hidden", tab.dataset.tab!=="menu");
+    };
+  });
+  document.getElementById("btnSaveGeneral").onclick = saveGeneralSettings;
+  document.getElementById("inputQrFile").addEventListener("change", handleQrFile);
+  document.getElementById("btnAddCategory").onclick = addCategory;
+  document.getElementById("btnClearHistory").onclick = ()=>{
+    if(confirm("确定清空今天的所有订单记录?此操作无法撤销。")){
+      const t = todayStr();
+      history = history.filter(o=>o.date!==t);
+      saveHistory();
+      alertToast("今日记录已清空");
+      openHistory();
+    }
+  };
+
+  // Discount
+  document.getElementById("btnAddDiscount").onclick = openDiscountModal;
+  document.querySelectorAll("#discountModal .pay-tab").forEach(btn=>{
+    btn.onclick = ()=>{
+      discountType = btn.dataset.dtype;
+      document.querySelectorAll("#discountModal .pay-tab").forEach(b=>b.classList.toggle("active", b===btn));
+      buildDiscountQuick();
+      updateDiscountPreview();
+    };
+  });
+  document.getElementById("discountInput").addEventListener("input", updateDiscountPreview);
+  document.getElementById("btnApplyDiscount").onclick = applyDiscount;
+  document.getElementById("btnDiscountPinSubmit").onclick = ()=>{
+    const val = document.getElementById("discountPinInput").value;
+    if(val === state.settings.pin){
+      document.getElementById("discountPinGate").classList.add("hidden");
+      document.getElementById("discountBody").classList.remove("hidden");
+    }else{
+      document.getElementById("discountPinError").classList.remove("hidden");
+    }
+  };
+
+  // Split bill
+  document.getElementById("btnSplitBill").onclick = openSplitModal;
+  document.querySelectorAll("#splitModal .pay-tab").forEach(btn=>{
+    btn.onclick = ()=> switchSplitMode(btn.dataset.split);
+  });
+  document.getElementById("btnAddSplitGroup").onclick = addSplitGroup;
+  document.getElementById("btnConfirmSplit").onclick = confirmSplit;
+
+  // click outside modal box closes modal
+  document.querySelectorAll(".modal").forEach(modal=>{
+    modal.addEventListener("click", e=>{
+      if(e.target!==modal) return;
+      modal.classList.add("hidden");
+      if(modal.id==="checkoutModal" && splitGroups && checkoutCtx && checkoutCtx.label){
+        renderSplitPayList();
+        showModal("splitPayModal");
+      }
+    });
+  });
+}
+
+document.addEventListener("DOMContentLoaded", init);
+})();

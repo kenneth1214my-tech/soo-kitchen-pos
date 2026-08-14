@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Soo's Kitchen POS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="shop-info">
+    <span id="shopName">Soo's Kitchen</span>
+    <span id="clock"></span>
+  </div>
+  <div class="topbar-actions">
+    <button class="icon-btn" id="btnHeldOrders" title="挂起的订单">🧷 挂单 <span id="heldCountBadge" class="count-badge hidden">0</span></button>
+    <button class="icon-btn" id="btnHistory" title="今日订单">🧾 记录</button>
+    <button class="icon-btn" id="btnSettings" title="设置">⚙ 设置</button>
+  </div>
+</header>
+
+<main id="app">
+  <section id="menuPane">
+    <nav id="categoryTabs"></nav>
+    <div id="itemGrid"></div>
+  </section>
+
+  <aside id="cartPane">
+    <div class="cart-header">
+      <span>当前订单 <b id="orderNoLabel"></b></span>
+      <div class="cart-header-actions">
+        <button id="btnHoldOrder" class="link-btn muted-link">挂单</button>
+        <button id="btnSplitBill" class="link-btn muted-link">拆分账单</button>
+        <button id="btnClearCart" class="link-btn">清空</button>
+      </div>
+    </div>
+    <div id="cartList"></div>
+    <div class="cart-summary">
+      <div class="row" id="rowSubtotal"><span>小计</span><span id="subtotalVal">RM0.00</span></div>
+      <div class="row discount-row hidden" id="rowDiscount"><span>折扣 <button id="btnRemoveDiscount" class="mini-x">✕</button></span><span id="discountVal">-RM0.00</span></div>
+      <div class="row" id="rowDiscountAdd"><span></span><button id="btnAddDiscount" class="link-btn">+ 熟客折扣</button></div>
+      <div class="row" id="rowTax" style="display:none"><span id="taxLabel">服务税</span><span id="taxVal">RM0.00</span></div>
+      <div class="row total"><span>总计</span><span id="totalVal">RM0.00</span></div>
+    </div>
+    <button id="btnCheckout" class="primary-btn" disabled>结账 Checkout</button>
+  </aside>
+</main>
+
+<button id="btnCartMobile" class="cart-fab">
+  🛒 <span id="cartFabCount">0</span> · <span id="cartFabTotal">RM0.00</span>
+</button>
+
+<!-- Checkout Modal -->
+<div id="checkoutModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span>结账</span><button class="close-btn" data-close="checkoutModal">✕</button></div>
+    <div class="pay-tabs">
+      <button class="pay-tab active" data-method="cash">💵 现金</button>
+      <button class="pay-tab" data-method="qr">📱 DuitNow / 电子钱包</button>
+    </div>
+
+    <div id="payCash" class="pay-panel">
+      <div class="due-amount">应付(现金) <span id="dueAmount">RM0.00</span></div>
+      <p id="cashRoundingNote" class="hint hidden"></p>
+      <div class="quick-amounts" id="quickAmounts"></div>
+      <input type="text" inputmode="decimal" id="cashReceived" placeholder="输入收到的现金金额" autocomplete="off">
+      <div class="change-row">
+        <span>找零</span>
+        <span id="changeVal">RM0.00</span>
+      </div>
+      <button id="btnConfirmCash" class="primary-btn" disabled>确认收款</button>
+    </div>
+
+    <div id="payQr" class="pay-panel hidden">
+      <div class="due-amount">应付 <span id="dueAmountQr">RM0.00</span></div>
+      <img id="qrImage" src="" alt="DuitNow QR" class="qr-image">
+      <p id="qrHint" class="hint">出示二维码给顾客扫描付款</p>
+      <button id="btnConfirmQr" class="primary-btn">确认已收到付款</button>
+    </div>
+  </div>
+</div>
+
+<!-- Discount Modal -->
+<div id="discountModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span>熟客折扣</span><button class="close-btn" data-close="discountModal">✕</button></div>
+
+    <div id="discountPinGate">
+      <p style="padding:0 18px;color:var(--text-mute);font-size:14px;">此操作需要管理密码</p>
+      <div style="padding:0 18px;">
+        <input type="password" inputmode="numeric" id="discountPinInput" maxlength="8" placeholder="PIN" style="width:100%;padding:14px;font-size:20px;text-align:center;border:2px solid var(--border);border-radius:12px;margin-bottom:12px;">
+        <button id="btnDiscountPinSubmit" class="primary-btn">确认</button>
+        <p id="discountPinError" class="error hidden" style="text-align:center;">密码错误</p>
+      </div>
+    </div>
+
+    <div id="discountBody" class="pay-panel hidden">
+      <div class="pay-tabs">
+        <button class="pay-tab active" data-dtype="percent">百分比 %</button>
+        <button class="pay-tab" data-dtype="amount">固定金额 RM</button>
+      </div>
+      <div class="quick-amounts" id="discountQuick"></div>
+      <input type="text" inputmode="decimal" id="discountInput" placeholder="输入折扣数值" autocomplete="off">
+      <div class="due-amount" style="margin:14px 0;">折扣后总计 <span id="discountPreviewTotal">RM0.00</span></div>
+      <button id="btnApplyDiscount" class="primary-btn">套用折扣</button>
+    </div>
+  </div>
+</div>
+
+<!-- Split Bill Modal -->
+<div id="splitModal" class="modal hidden">
+  <div class="modal-box wide">
+    <div class="modal-header"><span>拆分账单</span><button class="close-btn" data-close="splitModal">✕</button></div>
+    <div class="pay-tabs" style="padding:14px 18px 0;">
+      <button class="pay-tab active" data-split="equal">按人数平均分</button>
+      <button class="pay-tab" data-split="items">按菜品分单</button>
+    </div>
+
+    <div id="splitEqual" class="pay-panel">
+      <label style="display:block;font-size:13px;font-weight:700;color:var(--text-mute);margin-bottom:8px;">分成几份?</label>
+      <div class="quick-amounts" id="splitEqualCount"></div>
+      <div id="splitEqualPreview" class="split-preview"></div>
+    </div>
+
+    <div id="splitItems" class="pay-panel hidden">
+      <div class="split-group-tabs" id="splitGroupTabs"></div>
+      <button id="btnAddSplitGroup" class="secondary-btn" style="margin-bottom:10px;">+ 新增账单</button>
+      <p class="hint" id="splitItemsHint" style="text-align:left;">点选下方账单标签,再点菜品把它分到该账单</p>
+      <div id="splitItemList"></div>
+    </div>
+
+    <button id="btnConfirmSplit" class="primary-btn" style="margin:0 18px;width:calc(100% - 36px);">确认拆分,开始结账</button>
+  </div>
+</div>
+
+<!-- Item Note Modal -->
+<div id="itemNoteModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span id="itemNoteTitle">加备注</span><button class="close-btn" data-close="itemNoteModal">✕</button></div>
+    <div class="pay-panel">
+      <div class="quick-amounts note-chips" id="noteChips"></div>
+      <input type="text" id="itemNoteInput" placeholder="其他备注,例如：不要花生" autocomplete="off">
+      <button id="btnSaveNote" class="primary-btn" style="margin-top:14px;">保存备注</button>
+    </div>
+  </div>
+</div>
+
+<!-- Generic PIN Confirm Modal -->
+<div id="pinConfirmModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span id="pinConfirmTitle">需要管理密码</span><button class="close-btn" data-close="pinConfirmModal">✕</button></div>
+    <div style="padding:0 18px 20px;">
+      <input type="password" inputmode="numeric" id="pinConfirmInput" maxlength="8" placeholder="PIN" style="width:100%;padding:14px;font-size:20px;text-align:center;border:2px solid var(--border);border-radius:12px;margin:12px 0;">
+      <button id="btnPinConfirmSubmit" class="primary-btn">确认</button>
+      <p id="pinConfirmError" class="error hidden" style="text-align:center;">密码错误</p>
+    </div>
+  </div>
+</div>
+
+<!-- Held Orders Modal -->
+<div id="heldOrdersModal" class="modal hidden">
+  <div class="modal-box wide">
+    <div class="modal-header"><span>挂起的订单</span><button class="close-btn" data-close="heldOrdersModal">✕</button></div>
+    <div id="heldOrdersList" class="history-list"></div>
+  </div>
+</div>
+
+<!-- Split Pay List Modal -->
+<div id="splitPayModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span>分单结账</span><button class="close-btn" data-close="splitPayModal">✕</button></div>
+    <div id="splitPayList" class="history-list"></div>
+  </div>
+</div>
+
+<!-- Receipt Modal -->
+<div id="receiptModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span>✅ 订单完成</span><button class="close-btn" data-close="receiptModal">✕</button></div>
+    <div id="receiptContent" class="receipt"></div>
+    <div class="receipt-actions">
+      <button id="btnPrintReceipt" class="secondary-btn">🖨 打印收据</button>
+      <button id="btnPrintKitchen" class="secondary-btn">🍳 厨房单</button>
+      <button id="btnNewOrder" class="primary-btn">新订单</button>
+    </div>
+  </div>
+</div>
+
+<!-- History Modal -->
+<div id="historyModal" class="modal hidden">
+  <div class="modal-box wide">
+    <div class="modal-header"><span>今日订单记录</span><button class="close-btn" data-close="historyModal">✕</button></div>
+    <div id="historySummary" class="history-summary"></div>
+    <div id="historyList" class="history-list"></div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div id="settingsModal" class="modal hidden">
+  <div class="modal-box wide">
+    <div class="modal-header"><span>设置</span><button class="close-btn" data-close="settingsModal">✕</button></div>
+    <div id="pinGate">
+      <p>请输入管理密码 (默认 0000)</p>
+      <input type="password" inputmode="numeric" id="pinInput" maxlength="8" placeholder="PIN">
+      <button id="btnPinSubmit" class="primary-btn">进入</button>
+      <p id="pinError" class="error hidden">密码错误</p>
+    </div>
+    <div id="settingsBody" class="hidden">
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-tab="general">基本设置</button>
+        <button class="settings-tab" data-tab="menu">菜单管理</button>
+      </div>
+
+      <div id="tabGeneral" class="settings-panel">
+        <label>店铺名称</label>
+        <input type="text" id="inputShopName">
+
+        <label class="checkbox-row"><input type="checkbox" id="inputTaxEnabled"> 启用服务税 (SST)</label>
+        <label>税率 (%)</label>
+        <input type="number" id="inputTaxRate" min="0" max="100" step="0.1">
+
+        <label>DuitNow / 电子钱包 收款二维码</label>
+        <input type="file" id="inputQrFile" accept="image/*">
+        <img id="qrPreview" class="qr-preview hidden">
+
+        <label class="checkbox-row"><input type="checkbox" id="inputDiscountPinRequired"> 熟客折扣需要管理密码确认</label>
+
+        <label>设备标识 (多台设备同时用时,各填不同代号避免单号重复,例如 A / 收银台1)</label>
+        <input type="text" id="inputDeviceLabel" placeholder="留空则不显示">
+
+        <label>修改管理密码</label>
+        <input type="password" inputmode="numeric" id="inputNewPin" placeholder="新密码 (至少4位数字)">
+
+        <button id="btnSaveGeneral" class="primary-btn">保存设置</button>
+
+        <hr>
+        <label>蓝牙热敏打印机</label>
+        <div class="backup-actions">
+          <button id="btnConnectPrinter" class="secondary-btn">🖨 连接蓝牙打印机</button>
+          <button id="btnTestPrint" class="secondary-btn">打印测试页</button>
+        </div>
+        <p id="printerStatus" class="hint" style="text-align:left;">尚未连接打印机</p>
+        <label>打印纸宽度</label>
+        <select id="inputPaperWidth" class="select-input">
+          <option value="58">58mm (常见小型收据机)</option>
+          <option value="80">80mm</option>
+        </select>
+        <label class="checkbox-row"><input type="checkbox" id="inputAutoPrintKitchen"> 结账成功后自动打印厨房单</label>
+
+        <hr>
+        <label>数据备份</label>
+        <div class="backup-actions">
+          <button id="btnExportBackup" class="secondary-btn">导出完整备份 (JSON)</button>
+          <button id="btnExportCsv" class="secondary-btn">导出销售记录 (CSV)</button>
+        </div>
+        <label>从备份文件还原 (会覆盖现有菜单与设置)</label>
+        <input type="file" id="inputImportBackup" accept="application/json">
+
+        <hr>
+        <button id="btnClearHistory" class="danger-btn">清空今日订单记录</button>
+      </div>
+
+      <div id="tabMenu" class="settings-panel hidden">
+        <div class="menu-editor-actions">
+          <button id="btnAddCategory" class="secondary-btn">+ 新增分类</button>
+        </div>
+        <div id="categoryEditorList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
