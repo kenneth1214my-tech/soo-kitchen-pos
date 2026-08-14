@@ -123,6 +123,18 @@ function resolveComboContents(item){
     return found ? { name: found.name, qty: ci.qty } : null;
   }).filter(Boolean);
 }
+// comboContents stores the per-ONE-combo component quantity (e.g. "1 drink per combo"). Every
+// place that displays it against a cart/order LINE must scale by that line's own qty, or ordering
+// 2x a combo silently under-reports what's actually included — kitchen ticket already did this
+// scaling correctly; cart/receipt/print-receipt didn't, so centralize it here instead of leaving
+// each call site to remember the multiply.
+function comboContentsLabel(comboContents, lineQty){
+  return comboContents.map(c=>{
+    const totalQty = c.qty * lineQty;
+    return c.name + (totalQty>1 ? "x"+totalQty : "");
+  }).join("、");
+}
+
 function findMenuItemById(id){
   for(const cat of state.menu){
     const found = cat.items.find(i=>i.id===id);
@@ -244,7 +256,7 @@ function renderCart(){
         <div class="ci-info">
           <div class="ci-name">${escapeHtml(line.name)}${line.comboContents && line.comboContents.length ? ` <span class="combo-tag">套餐</span>` : ""}</div>
           <div class="ci-price">${fmt(line.price)} x ${line.qty} = ${fmt(line.price*line.qty)}</div>
-          ${line.comboContents && line.comboContents.length ? `<div class="combo-contents" style="padding:0;margin:2px 0;">含: ${line.comboContents.map(c=>escapeHtml(c.name)+(c.qty>1?"x"+c.qty:"")).join("、")}</div>` : ""}
+          ${line.comboContents && line.comboContents.length ? `<div class="combo-contents" style="padding:0;margin:2px 0;">含: ${escapeHtml(comboContentsLabel(line.comboContents, line.qty))}</div>` : ""}
           <div class="ci-note">
             ${line.note ? `<span class="ci-note-text">📝 ${escapeHtml(line.note)}</span>` : ""}
             <button class="ci-note-btn" data-act="note">${line.note ? "修改备注" : "+ 加备注"}</button>
@@ -370,7 +382,11 @@ function renderHeldOrdersList(){
 
 function resumeHeldOrder(id){
   if(blockIfSplitInProgress()) return;
-  if(cart.length>0 && !confirm("当前购物车还有内容,恢复挂单会覆盖现有购物车,确定吗？")) return;
+  // Always confirm, even when the cart is currently empty — a conditional-only confirm here was
+  // the exact same gap that let a mis-tap on reopenOrder's "重开" silently blow away the cart with
+  // no checkpoint (fixed separately); this sibling function had the identical bug.
+  const warnExtra = cart.length>0 ? "\n\n当前购物车还有内容,会被覆盖。" : "";
+  if(!confirm(`确定恢复这张挂起的订单吗?${warnExtra}`)) return;
   const idx = heldOrders.findIndex(h=>h.id===id);
   if(idx<0) return;
   const held = heldOrders[idx];
@@ -655,7 +671,7 @@ function showReceipt(order, returnToSplitList){
   const el = document.getElementById("receiptContent");
   const isEqualSplit = order.isSplit && order.splitKind==="equal";
   const comboLine = it => it.comboContents && it.comboContents.length
-    ? `<div class="r-line" style="padding:0 0 4px 12px;"><span style="font-size:12px;color:var(--text-mute);">含: ${it.comboContents.map(c=>escapeHtml(c.name)+(c.qty>1?"x"+c.qty:"")).join("、")}</span></div>`
+    ? `<div class="r-line" style="padding:0 0 4px 12px;"><span style="font-size:12px;color:var(--text-mute);">含: ${escapeHtml(comboContentsLabel(it.comboContents, it.qty))}</span></div>`
     : "";
   const itemsBlock = isEqualSplit
     ? `<p class="hint" style="text-align:left;margin:0 0 8px;">均分账单 · 整单内容: ${order.items.map(it=>escapeHtml(it.name)+" x"+it.qty).join("、")}</p><hr>`
@@ -766,6 +782,7 @@ function findMenuItemByName(name){
 }
 
 function reopenOrder(orderNo){
+  if(blockIfSplitInProgress()) return;
   requestPinConfirm(`重开订单 ${orderNo} 到购物车`, ()=>{
     const ord = history.find(o=>o.orderNo===orderNo);
     if(!ord) return;
@@ -776,7 +793,7 @@ function reopenOrder(orderNo){
     if(!confirm(`确定把订单 ${orderNo} 的内容重新放入购物车吗?${warnExtra}`)) return;
     cart = ord.items.map(it=>{
       const menuItem = findMenuItemByName(it.name);
-      return { itemId: menuItem ? menuItem.id : "reopen_"+it.name, name: it.name, price: it.price, qty: it.qty, note: it.note||"" };
+      return { itemId: menuItem ? menuItem.id : "reopen_"+it.name, name: it.name, price: it.price, qty: it.qty, note: it.note||"", comboContents: it.comboContents||[] };
     });
     resetOrderState();
     renderCart();
@@ -1421,7 +1438,7 @@ function receiptToPrintBlocks(order){
     blocks.push({ text: `${it.name} x${it.qty}${it.note?" ("+it.note+")":""}` });
     blocks.push({ text: `  ${fmt(it.price*it.qty)}`, align:"right" });
     if(it.comboContents && it.comboContents.length){
-      blocks.push({ text: `  含: ${it.comboContents.map(c=>c.name+(c.qty>1?"x"+c.qty:"")).join("、")}`, size:"sm" });
+      blocks.push({ text: `  含: ${comboContentsLabel(it.comboContents, it.qty)}`, size:"sm" });
     }
   });
   blocks.push({ text: "--------------------------------", spacingAfter:4 });
@@ -1501,8 +1518,13 @@ function renderTrashBadge(){
 }
 
 function openTrashModal(){
-  renderTrashList();
-  showModal("trashModal");
+  // btnShowTrash lives in the settingsModal header, outside the pinGate/settingsBody split, so it
+  // was reachable (and could restore any deleted item/category/combo/promo) without ever entering
+  // the settings PIN. Gate it explicitly rather than relying on modal position.
+  requestPinConfirm("需要管理密码才能查看最近删除", ()=>{
+    renderTrashList();
+    showModal("trashModal");
+  });
 }
 
 function renderTrashList(){
