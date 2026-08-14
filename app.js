@@ -140,13 +140,34 @@ function escapeHtml(s){
 }
 
 // ---------- Cart ----------
+// A split is "in progress" once confirmSplit() has locked in groups but not every group has paid yet.
+// While true, the cart contents are frozen (group totals were computed from them) and the only way
+// forward is to keep paying from splitPayModal, or to clear the whole order.
+function splitInProgress(){
+  return !!splitGroups && !splitGroups.every(g=>g.paid);
+}
+function blockIfSplitInProgress(){
+  if(!splitInProgress()) return false;
+  alertToast("还有账单未结清,请先在「分单结账」完成付款,或清空订单");
+  renderSplitPayList();
+  showModal("splitPayModal");
+  return true;
+}
+function resetOrderState(){
+  discount = null;
+  activeOrderNo = null;
+  splitGroups = null;
+}
+
 function addToCart(item){
+  if(blockIfSplitInProgress()) return;
   const existing = cart.find(c=>c.itemId===item.id);
   if(existing){ existing.qty++; }
   else{ cart.push({ itemId:item.id, name:item.name, price:item.price, qty:1, note:"" }); }
   renderCart();
 }
 function changeQty(itemId, delta){
+  if(blockIfSplitInProgress()) return;
   const line = cart.find(c=>c.itemId===itemId);
   if(!line) return;
   line.qty += delta;
@@ -154,14 +175,13 @@ function changeQty(itemId, delta){
   renderCart();
 }
 function removeLine(itemId){
+  if(blockIfSplitInProgress()) return;
   cart = cart.filter(c=>c.itemId!==itemId);
   renderCart();
 }
 function clearCart(){
   cart = [];
-  discount = null;
-  activeOrderNo = null;
-  splitGroups = null;
+  resetOrderState();
   renderCart();
 }
 function cartSubtotal(){ return cart.reduce((s,c)=>s+c.price*c.qty,0); }
@@ -246,6 +266,7 @@ function renderCart(){
 // ---------- Hold / park order ----------
 function holdCurrentOrder(){
   if(cart.length===0) return;
+  if(blockIfSplitInProgress()) return;
   const label = prompt("给这张挂起的单起个名字(例如桌号/顾客名),留空则自动编号") || "";
   heldOrders.push({
     id: uid(),
@@ -256,9 +277,7 @@ function holdCurrentOrder(){
   });
   saveHeldOrders();
   cart = [];
-  discount = null;
-  activeOrderNo = null;
-  splitGroups = null;
+  resetOrderState();
   renderCart();
   renderHeldBadge();
   closeMobileCart();
@@ -314,14 +333,14 @@ function renderHeldOrdersList(){
 }
 
 function resumeHeldOrder(id){
+  if(blockIfSplitInProgress()) return;
   if(cart.length>0 && !confirm("当前购物车还有内容,恢复挂单会覆盖现有购物车,确定吗？")) return;
   const idx = heldOrders.findIndex(h=>h.id===id);
   if(idx<0) return;
   const held = heldOrders[idx];
   cart = held.cart.map(c=>Object.assign({}, c));
+  resetOrderState();
   discount = held.discount ? Object.assign({}, held.discount) : null;
-  activeOrderNo = null;
-  splitGroups = null;
   heldOrders.splice(idx,1);
   saveHeldOrders();
   renderCart();
@@ -334,6 +353,7 @@ let discountType = "percent";
 
 function openDiscountModal(){
   if(cart.length===0) return;
+  if(blockIfSplitInProgress()) return;
   document.getElementById("discountPinInput").value = "";
   document.getElementById("discountPinError").classList.add("hidden");
   document.getElementById("discountInput").value = discount ? String(discount.value) : "";
@@ -442,6 +462,7 @@ function buildFullCartCtx(){
 
 function openCheckout(ctx){
   if(cart.length===0) return;
+  if(!ctx && blockIfSplitInProgress()) return;
   if(activeOrderNo===null) activeOrderNo = peekOrderNo();
   checkoutCtx = ctx || buildFullCartCtx();
   checkoutCtx.cashDue = roundToNickel(checkoutCtx.total);
@@ -573,7 +594,7 @@ function showReceipt(order, returnToSplitList){
       `).join("")}<hr>`;
   el.innerHTML = `
     <div class="r-shop">${escapeHtml(state.settings.shopName)}</div>
-    <div class="r-meta">订单 ${order.orderNo} · ${order.date} ${order.time}</div>
+    <div class="r-meta">订单 ${escapeHtml(order.orderNo)} · ${order.date} ${order.time}</div>
     <hr>
     ${itemsBlock}
     <div class="r-line"><span>${isEqualSplit ? "本账单应付 (均分)" : "小计"}</span><span>${fmt(order.subtotal)}</span></div>
@@ -589,6 +610,11 @@ function showReceipt(order, returnToSplitList){
   `;
   document.getElementById("btnNewOrder").dataset.returnSplit = returnToSplitList ? "1" : "";
   currentReceiptOrder = order;
+  // Equal-split receipts carry the WHOLE order's items (shown above for reference only, not this
+  // guest's share) — the kitchen ticket for that already printed once when the split was confirmed,
+  // so a "reprint" button here would resend the entire order's dishes to the kitchen every time any
+  // one guest's receipt is reopened. Only item-mode splits (this guest's actual dishes) make sense to reprint.
+  document.getElementById("btnPrintKitchen").classList.toggle("hidden", isEqualSplit);
   showModal("receiptModal");
 }
 
@@ -628,7 +654,7 @@ function openHistory(){
       row.className = "history-item" + (o.voided ? " voided" : "");
       row.innerHTML = `
         <div>
-          <div class="h-no">${o.orderNo} · ${fmt(o.total)}</div>
+          <div class="h-no">${escapeHtml(o.orderNo)} · ${fmt(o.total)}</div>
           <div class="h-method">${o.time} · ${o.paymentMethod==="cash"?"现金":"电子钱包"}${o.isSplit?" · 分单":""}</div>
         </div>
         ${o.voided ? `<span class="h-voided-tag">已作废</span>` : `
@@ -660,15 +686,24 @@ function voidOrder(orderNo){
   });
 }
 
+function findMenuItemByName(name){
+  for(const cat of state.menu){
+    const found = cat.items.find(i=>i.name===name);
+    if(found) return found;
+  }
+  return null;
+}
+
 function reopenOrder(orderNo){
   requestPinConfirm(`重开订单 ${orderNo} 到购物车`, ()=>{
     const ord = history.find(o=>o.orderNo===orderNo);
     if(!ord) return;
     if(cart.length>0 && !confirm("当前购物车还有内容,重开此单会覆盖现有购物车,确定吗？")) return;
-    cart = ord.items.map(it=>({ itemId: uid(), name: it.name, price: it.price, qty: it.qty, note: it.note||"" }));
-    discount = null;
-    activeOrderNo = null;
-    splitGroups = null;
+    cart = ord.items.map(it=>{
+      const menuItem = findMenuItemByName(it.name);
+      return { itemId: menuItem ? menuItem.id : "reopen_"+it.name, name: it.name, price: it.price, qty: it.qty, note: it.note||"" };
+    });
+    resetOrderState();
     renderCart();
     hideModal("historyModal");
     alertToast("已把该订单内容放入购物车,请核实后重新结账");
@@ -685,6 +720,7 @@ let activeSplitGroupIdx = 0;
 
 function openSplitModal(){
   if(cart.length===0) return;
+  if(blockIfSplitInProgress()) return;
   splitMode = "equal";
   splitEqualN = 2;
   document.querySelectorAll("#splitModal .pay-tab").forEach(b=>b.classList.toggle("active", b.dataset.split==="equal"));
@@ -805,16 +841,25 @@ function confirmSplit(){
   let groups = [];
   if(splitMode==="equal"){
     const shares = computeEqualShares(splitEqualN);
-    groups = shares.map((total,i)=>({
-      label: String(i+1),
-      items: cart.map(c=>({name:c.name, price:c.price, qty:c.qty, note:c.note||""})),
-      subtotal: round2(cartSub/splitEqualN),
-      discountShare: round2(totalDiscount/splitEqualN),
-      tax: round2(taxEnabled ? total*taxRate/(100+taxRate) : 0),
-      total,
-      splitKind:"equal"
-    }));
-    // fix rounding on subtotal/discount so components are internally consistent per row (display only)
+    // Derive subtotal/tax FROM each share's (already-exact) total, rather than dividing
+    // cartSub/discount independently, so subtotal - discountShare + tax === total for every
+    // row even after cent rounding — this guarantees each printed receipt's own numbers add up,
+    // which matters more than the shares summing back to the cart-level aggregate.
+    groups = shares.map((total,i)=>{
+      const discountShare = round2(totalDiscount/splitEqualN);
+      const discSub = taxEnabled ? round2(total/(1+taxRate/100)) : total;
+      const tax = round2(total - discSub);
+      const subtotal = round2(discSub + discountShare);
+      return {
+        label: String(i+1),
+        items: cart.map(c=>({name:c.name, price:c.price, qty:c.qty, note:c.note||""})),
+        subtotal,
+        discountShare,
+        tax,
+        total,
+        splitKind:"equal"
+      };
+    });
   }else{
     const unassigned = splitUnits.filter(u=>splitUnitAssign[u.unitKey]===undefined);
     if(unassigned.length>0){
@@ -849,12 +894,17 @@ function confirmSplit(){
     });
   }
 
-  // reconcile rounding so the groups sum exactly to cartTotal()
+  // Reconcile rounding so the groups sum exactly to cartTotal(). The diff is folded into the
+  // last group's subtotal (not just total), so that group's own subtotal-discount+tax still
+  // equals its total — patching total alone would leave that one receipt internally inconsistent.
+  // (Adjusting subtotal rather than tax avoids conjuring a nonzero tax line when tax is disabled.)
   const target = round2(cartTotal());
   const sum = round2(groups.reduce((s,g)=>s+g.total,0));
   const diff = round2(target - sum);
   if(Math.abs(diff)>=0.01 && groups.length>0){
-    groups[groups.length-1].total = round2(groups[groups.length-1].total + diff);
+    const last = groups[groups.length-1];
+    last.subtotal = round2(last.subtotal + diff);
+    last.total = round2(last.total + diff);
   }
 
   splitGroups = groups.map(g=>Object.assign({paid:false}, g));
@@ -1095,14 +1145,19 @@ async function connectBluetoothPrinter(){
 async function sendBytesToPrinter(bytes){
   if(!btPrinterChar) throw new Error("打印机未连接");
   const CHUNK = 180;
+  const noResponse = !!btPrinterChar.properties.writeWithoutResponse;
   for(let i=0;i<bytes.length;i+=CHUNK){
     const chunk = bytes.slice(i, i+CHUNK);
-    if(btPrinterChar.properties.writeWithoutResponse){
+    if(noResponse){
+      // writeValueWithoutResponse doesn't wait for the printer to actually consume the bytes,
+      // so cheap printer clones with small buffers need a throttling delay here.
       await btPrinterChar.writeValueWithoutResponse(chunk);
+      await new Promise(r=>setTimeout(r, 20));
     }else{
+      // writeValue already awaits the printer's acknowledgment, so it provides its own
+      // backpressure — no extra delay needed on top of that.
       await btPrinterChar.writeValue(chunk);
     }
-    await new Promise(r=>setTimeout(r, 20));
   }
 }
 
@@ -1345,7 +1400,7 @@ function renderMenuEditor(){
         saveState(); renderMenuEditor(); renderItemGridIfNeeded();
       };
       nameInput.onchange = ()=>{ item.name = nameInput.value.trim()||item.name; saveState(); renderItemGridIfNeeded(); };
-      priceInput.onchange = ()=>{ item.price = parseFloat(priceInput.value)||0; saveState(); renderItemGridIfNeeded(); };
+      priceInput.onchange = ()=>{ item.price = Math.max(0, parseFloat(priceInput.value)||0); priceInput.value = item.price; saveState(); renderItemGridIfNeeded(); };
       delBtn.onclick = ()=>{
         cat.items = cat.items.filter(i=>i.id!==item.id);
         saveState(); renderMenuEditor(); renderItemGridIfNeeded();
