@@ -2461,7 +2461,16 @@ function init(){
   document.getElementById("btnNewOrder").onclick = ()=>{
     const returnSplit = document.getElementById("btnNewOrder").dataset.returnSplit === "1";
     hideModal("receiptModal");
-    if(returnSplit){ renderSplitPayList(); showModal("splitPayModal"); }
+    if(returnSplit){
+      renderSplitPayList();
+      showModal("splitPayModal");
+    }else{
+      // Jump back to the first category tab for the next customer, instead of leaving the item
+      // grid wherever the previous order happened to be browsing (e.g. still on 小吃 Snacks).
+      activeCategory = state.menu[0] ? state.menu[0].id : null;
+      renderCategoryTabs();
+      renderItemGrid();
+    }
   };
   document.getElementById("btnPrintReceipt").onclick = ()=>{
     if(btPrinterChar && currentReceiptOrder){ printReceiptBT(currentReceiptOrder); }
