@@ -786,7 +786,7 @@ function openHistory(){
         `}
       `;
       if(!o.voided){
-        row.querySelector(".print").onclick = ()=> showReceipt(o, false);
+        row.querySelector(".print").onclick = ()=>{ hideModal("historyModal"); showReceipt(o, false); };
         row.querySelector(".reopen").onclick = ()=> reopenOrder(o.orderNo);
         row.querySelector(".void").onclick = ()=> voidOrder(o.orderNo);
       }
