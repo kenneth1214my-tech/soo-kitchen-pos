@@ -2340,7 +2340,19 @@ function addCategory(){
 }
 
 // ---------- Modal helpers ----------
-function showModal(id){ document.getElementById(id).classList.remove("hidden"); }
+// All .modal elements share the same z-index and are full-screen overlays, so when two are open
+// at once, plain DOM order decides which one is actually visible/clickable — not which one was
+// opened more recently. Every modal here can be triggered from inside another already-open modal
+// (PIN confirm from history/settings, combo editor from settings, etc.), so relying on each
+// modal's fixed position in the HTML was wrong: several ended up silently unreachable on a real
+// tap even though .click()-based testing never caught it (synthetic clicks skip hit-testing).
+// Moving the modal to the end of <body> every time it's shown guarantees it always paints on top
+// of whatever else is open, regardless of where it was declared.
+function showModal(id){
+  const el = document.getElementById(id);
+  document.body.appendChild(el);
+  el.classList.remove("hidden");
+}
 function hideModal(id){ document.getElementById(id).classList.add("hidden"); }
 
 function alertToast(msg){
