@@ -779,12 +779,14 @@ function openHistory(){
         </div>
         ${o.voided ? `<span class="h-voided-tag">已作废</span>` : `
           <div class="h-actions">
+            <button class="print">打印</button>
             <button class="reopen">重开</button>
             <button class="void">作废</button>
           </div>
         `}
       `;
       if(!o.voided){
+        row.querySelector(".print").onclick = ()=> showReceipt(o, false);
         row.querySelector(".reopen").onclick = ()=> reopenOrder(o.orderNo);
         row.querySelector(".void").onclick = ()=> voidOrder(o.orderNo);
       }
