@@ -280,6 +280,7 @@ input{font-family:inherit;}
 .receipt .r-line{display:flex;justify-content:space-between;padding:4px 0;}
 .receipt hr{border:none;border-top:1px dashed var(--border);margin:10px 0;}
 .receipt .r-total{font-weight:800;font-size:16px;}
+.receipt .r-footer{text-align:center;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border);font-weight:700;}
 .receipt-actions{display:flex;gap:8px;padding:0 18px;flex-wrap:wrap;}
 .receipt-actions button{flex:1;min-width:90px;margin:0;font-size:13px;padding:14px 6px;}
 .select-input{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:15px;background:#fff;}

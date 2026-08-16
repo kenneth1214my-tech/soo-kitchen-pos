@@ -705,6 +705,7 @@ function showReceipt(order, returnToSplitList){
       <div class="r-line"><span>实收</span><span>${fmt(order.cashReceived)}</span></div>
       <div class="r-line"><span>找零</span><span>${fmt(order.change)}</span></div>
     `:""}
+    <div class="r-footer">谢谢光临 ， THANK YOU .</div>
   `;
   document.getElementById("btnNewOrder").dataset.returnSplit = returnToSplitList ? "1" : "";
   currentReceiptOrder = order;
@@ -1841,7 +1842,7 @@ function receiptToPrintBlocks(order){
   if(order.paymentMethod==="cash"){
     blocks.push({ text: `实收 ${fmt(order.cashReceived)}  找零 ${fmt(order.change)}` });
   }
-  blocks.push({ text: "谢谢惠顾 Thank You", align:"center", spacingAfter:6 });
+  blocks.push({ text: "谢谢光临 ， THANK YOU .", align:"center", spacingAfter:6 });
   return blocks;
 }
 
