@@ -82,17 +82,17 @@ main{max-width:720px;margin:0 auto;padding:18px;}
 }
 .panel h3{margin:0 0 12px;font-size:15px;}
 
-.day-chart .day-row{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:13px;}
-.day-chart .day-label{width:80px;flex-shrink:0;color:var(--text-mute);}
-.day-chart .day-bar-wrap{flex:1;background:var(--bg);border-radius:6px;overflow:hidden;height:18px;}
-.day-chart .day-bar{background:var(--brand);height:100%;border-radius:6px;}
-.day-chart .day-value{width:90px;text-align:right;flex-shrink:0;font-weight:700;}
-.empty-note{color:var(--text-mute);font-size:13px;padding:6px 0;}
-
-.top-items .top-item-row{
-  display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);font-size:14px;
+/* Shared horizontal bar-chart row, used by both 每日营业额 (dates) and 热销菜品 (dish names) —
+   not scoped under .day-chart specifically since both panels need the identical row layout. */
+.day-row{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:13px;}
+.day-label{
+  width:110px;flex-shrink:0;color:var(--text-mute);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
-.top-items .top-item-row:last-child{border-bottom:none;}
+.day-bar-wrap{flex:1;background:var(--bg);border-radius:6px;overflow:hidden;height:18px;}
+.day-bar{background:var(--brand);height:100%;border-radius:6px;}
+.day-value{width:90px;text-align:right;flex-shrink:0;font-weight:700;}
+.empty-note{color:var(--text-mute);font-size:13px;padding:6px 0;}
 
 .order-table table{width:100%;border-collapse:collapse;font-size:13px;}
 .order-table th{text-align:left;color:var(--text-mute);font-weight:700;padding:6px 4px;border-bottom:1px solid var(--border);}

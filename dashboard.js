@@ -121,11 +121,21 @@ function render(orders){
   }
 
   const topItemsEl = document.getElementById("topItems");
-  topItemsEl.innerHTML = stats.topItems.length===0
-    ? `<div class="empty-note">这段范围内没有订单</div>`
-    : stats.topItems.map(it=>`
-        <div class="top-item-row"><span>${escapeHtml(it.name)}</span><span>x${it.qty}</span></div>
-      `).join("");
+  if(stats.topItems.length===0){
+    topItemsEl.innerHTML = `<div class="empty-note">这段范围内没有订单</div>`;
+  }else{
+    const maxQty = stats.topItems.reduce((m,it)=>Math.max(m,it.qty), 0);
+    topItemsEl.innerHTML = stats.topItems.map(it=>{
+      const pct = maxQty>0 ? Math.max(4, Math.round(it.qty/maxQty*100)) : 0;
+      return `
+        <div class="day-row">
+          <span class="day-label" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</span>
+          <span class="day-bar-wrap"><span class="day-bar" style="width:${pct}%"></span></span>
+          <span class="day-value">x${it.qty}</span>
+        </div>
+      `;
+    }).join("");
+  }
 
   const orderTableEl = document.getElementById("orderTable");
   if(orders.length===0){
