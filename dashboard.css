@@ -94,6 +94,15 @@ main{max-width:720px;margin:0 auto;padding:18px;}
 .day-value{width:90px;text-align:right;flex-shrink:0;font-weight:700;}
 .empty-note{color:var(--text-mute);font-size:13px;padding:6px 0;}
 
+/* On a narrow phone (this dashboard's primary device), the fixed label+value columns otherwise
+   leave the bar itself only ~85px wide — barely a bar. Shrink both columns so the bar stays the
+   visually dominant element, which is the whole point of a bar chart. */
+@media (max-width:420px){
+  .day-label{width:66px;font-size:12px;}
+  .day-value{width:68px;font-size:12px;}
+  .day-row{gap:6px;}
+}
+
 .order-table table{width:100%;border-collapse:collapse;font-size:13px;}
 .order-table th{text-align:left;color:var(--text-mute);font-weight:700;padding:6px 4px;border-bottom:1px solid var(--border);}
 .order-table td{padding:7px 4px;border-bottom:1px dashed var(--border);}
