@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Soo's Kitchen 营业额</title>
+<link rel="stylesheet" href="dashboard.css?v=202608160001">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="title">Soo's Kitchen 营业额</div>
+  <button id="btnDisconnect" class="link-btn hidden">断开</button>
+</header>
+
+<main id="connectView">
+  <div class="card">
+    <p class="hint">这是给店主自己远端查看营业额用的页面,员工不会看到。贴上跟 POS 里一样的 Firebase 配置和店铺代号即可查看。</p>
+    <label>Firebase 项目配置</label>
+    <textarea id="cloudConfigInput" rows="5" placeholder='{"apiKey":"...", "authDomain":"...", "projectId":"...", ...}'></textarea>
+    <label>店铺代号</label>
+    <input type="text" id="cloudShopIdInput" placeholder="跟 POS 设备里的店铺代号一致">
+    <button id="btnConnect" class="primary-btn">连接查看</button>
+    <p id="connectStatus" class="hint"></p>
+  </div>
+</main>
+
+<main id="dashboardView" class="hidden">
+  <div class="range-bar">
+    <button class="range-btn" data-range="today">今天</button>
+    <button class="range-btn" data-range="week">本周</button>
+    <button class="range-btn" data-range="month">本月</button>
+    <button class="range-btn" data-range="custom">自定义</button>
+    <button id="btnRefresh" class="link-btn">🔄 刷新</button>
+  </div>
+  <div id="customRange" class="custom-range hidden">
+    <input type="date" id="rangeStart">
+    <span>至</span>
+    <input type="date" id="rangeEnd">
+    <button id="btnApplyCustomRange" class="secondary-btn">套用</button>
+  </div>
+  <p id="lastRefreshed" class="hint"></p>
+
+  <div class="stat-grid">
+    <div class="stat-card"><span class="stat-label">总营业额</span><span class="stat-value" id="statRevenue">RM0.00</span></div>
+    <div class="stat-card"><span class="stat-label">订单数</span><span class="stat-value" id="statOrders">0</span></div>
+    <div class="stat-card"><span class="stat-label">平均客单价</span><span class="stat-value" id="statAvg">RM0.00</span></div>
+    <div class="stat-card"><span class="stat-label">现金 / 电子钱包</span><span class="stat-value" id="statSplit">RM0.00 / RM0.00</span></div>
+  </div>
+
+  <section class="panel">
+    <h3>每日营业额</h3>
+    <div id="dayChart" class="day-chart"></div>
+  </section>
+
+  <section class="panel">
+    <h3>热销菜品</h3>
+    <div id="topItems" class="top-items"></div>
+  </section>
+
+  <section class="panel">
+    <h3>订单明细</h3>
+    <div id="orderTable" class="order-table"></div>
+  </section>
+</main>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
+<script src="dashboard.js?v=202608160001" defer></script>
+</body>
+</html>

@@ -650,6 +650,7 @@ function finalizeOrder(paymentMethod, extra){
   };
   history.unshift(order);
   saveHistory();
+  pushOrderToCloud(order);
   hideModal("checkoutModal");
 
   if(splitGroups){
@@ -804,6 +805,7 @@ function voidOrder(orderNo){
     if(!confirm(`确定作废订单 ${orderNo} (${fmt(ord.total)})？此操作会保留记录但不计入今日营业额。`)) return;
     ord.voided = true;
     saveHistory();
+    pushOrderToCloud(ord);
     openHistory();
     alertToast("订单已作废");
   });
@@ -1491,6 +1493,20 @@ function pushCloudState(){
     // Transient network failures shouldn't strand an edit client-side forever.
     cloudRetryTimer = setTimeout(pushCloudState, 15000);
   });
+}
+
+// Feeds the read-only sales dashboard (dashboard.html) — a separate page the shop owner opens
+// on their own device to check revenue remotely. One document per order under the shop's own
+// Firestore doc, independent of the menu/settings sync above. Best-effort only: if this fails,
+// the order stays exactly as safe in local history either way, it just won't show on the
+// dashboard until a later successful push (there is no retry queue for this in v1 — acceptable
+// for a low-stakes "nice to check from home" view, unlike the menu/settings sync).
+function pushOrderToCloud(order){
+  const cfg = loadCloudConfig();
+  if(!cfg || !cfg.enabled || !cloudDb) return;
+  cloudDb.collection("posShops").doc(cfg.shopId).collection("orders").doc(order.orderNo)
+    .set(order, {merge:true})
+    .catch(()=>{ /* best-effort, see comment above */ });
 }
 
 function initCloudSyncOnLoad(){
