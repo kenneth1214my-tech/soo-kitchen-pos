@@ -80,7 +80,7 @@ let activeCategory = state.menu[0] ? state.menu[0].id : null;
 let unlockedSettings = false;
 let discount = null; // {type:'percent'|'amount', value:number}
 
-function fmt(n){ return "RM" + (Math.round(n*100)/100).toFixed(2); }
+function fmt(n){ return "RM" + (Math.round((n||0)*100)/100).toFixed(2); }
 function round2(n){ return Math.round(n*100)/100; }
 function roundToNickel(n){ return Math.round(n*20)/20; }
 function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -1504,9 +1504,23 @@ function pushCloudState(){
 function pushOrderToCloud(order){
   const cfg = loadCloudConfig();
   if(!cfg || !cfg.enabled || !cloudDb) return;
-  cloudDb.collection("posShops").doc(cfg.shopId).collection("orders").doc(order.orderNo)
-    .set(order, {merge:true})
-    .catch(()=>{ /* best-effort, see comment above */ });
+  // order.orderNo alone is NOT a safe Firestore doc ID: it's built from state.nextOrderSeq, which
+  // ensureOrderSeq() resets to 1 every day — so "#001" on Monday and "#001" on Tuesday are the
+  // same string. Using orderNo bare would make Tuesday's first sale silently overwrite Monday's
+  // via this same .set({merge:true}) call, corrupting past days' records with zero indication.
+  // Prefixing with the date makes the doc ID unique across all time.
+  const docId = `${order.date}_${order.orderNo}`;
+  try{
+    // deepClone() round-trips through JSON, which drops any explicit `undefined` field (e.g.
+    // cashReceived/change are literally `undefined` on QR orders, not omitted — see finalizeOrder).
+    // Firestore's SDK throws SYNCHRONOUSLY on .set() when a field is undefined, which — since this
+    // is called directly from finalizeOrder()/voidOrder() — would otherwise abort checkout/void
+    // entirely just because this optional, best-effort cloud push failed. Wrapping in try/catch
+    // too so this feature can never break the core flow no matter what causes a future failure.
+    cloudDb.collection("posShops").doc(cfg.shopId).collection("orders").doc(docId)
+      .set(deepClone(order), {merge:true})
+      .catch(()=>{ /* best-effort, see comment above */ });
+  }catch(e){ /* best-effort, see comment above */ }
 }
 
 function initCloudSyncOnLoad(){

@@ -43,6 +43,18 @@ function connectFirestore(configObj){
   cloudDb = firebase.firestore(app);
 }
 
+// order.time is a 12-hour string like "12:30 am" (from toLocaleTimeString on the till). Sorting
+// those as plain strings is wrong right around midnight — "12:30 am" (the earliest time of day)
+// lexicographically sorts AFTER "01:15 am", since "1" < "2" as characters. Parse to minutes
+// since midnight instead so orders display in true chronological order.
+function timeToMinutes(timeStr){
+  const m = /^(\d{1,2}):(\d{2})\s*(am|pm)$/i.exec(String(timeStr||"").trim());
+  if(!m) return 0;
+  let h = parseInt(m[1],10) % 12;
+  if(/pm/i.test(m[3])) h += 12;
+  return h*60 + parseInt(m[2],10);
+}
+
 function fetchOrders(shopId, start, end){
   // Only orderBy the same field the range filter is on (date) — Firestore can satisfy that with
   // its automatic single-field index. Adding a second orderBy(time) would require a manual
@@ -56,7 +68,7 @@ function fetchOrders(shopId, start, end){
     .then(snap=>{
       const orders = [];
       snap.forEach(doc=> orders.push(doc.data()));
-      orders.sort((a,b)=> (a.date+" "+a.time).localeCompare(b.date+" "+b.time));
+      orders.sort((a,b)=> a.date===b.date ? timeToMinutes(a.time)-timeToMinutes(b.time) : a.date.localeCompare(b.date));
       return orders;
     });
 }
@@ -238,7 +250,10 @@ function init(){
     document.getElementById("cloudShopIdInput").value = saved.shopId || "";
     let configObj;
     try{ configObj = JSON.parse(saved.configText); }
-    catch(e){ return; }
+    catch(e){
+      document.getElementById("connectStatus").textContent = "已保存的配置格式有误,请重新贴上";
+      return;
+    }
     tryConnect(configObj, saved.shopId);
   }
 }
