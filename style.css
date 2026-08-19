@@ -94,6 +94,13 @@ input{font-family:inherit;}
 
 #itemGrid{
   flex:1;overflow-y:auto;
+  /* Without this, the browser's default touch handling treats a horizontal drag as ambiguous on
+     a vertically-scrollable container and can swallow/cancel the touch sequence before our own
+     pointerdown/pointerup swipe-detection JS ever sees a clean gesture — this is why the swipe
+     worked in synthetic PointerEvent tests (which bypass native gesture recognition entirely)
+     but not on a real touchscreen. pan-y keeps native vertical scrolling but hands horizontal
+     touch movement to JS instead of the browser's own gesture recognizer. */
+  touch-action: pan-y;
   padding:12px;
   display:grid;
   grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
