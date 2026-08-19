@@ -8,6 +8,8 @@ const HELD_KEY = "sk_pos_held_v1";
 const DEFAULT_STATE = {
   settings:{
     shopName:"Soo's Kitchen",
+    shopAddress:"",
+    receiptFooterText:"谢谢光临 ， THANK YOU .",
     taxEnabled:false,
     taxRate:6,
     qrImage:"",
@@ -110,6 +112,38 @@ function renderCategoryTabs(){
     btn.onclick = ()=>{ activeCategory = cat.id; renderCategoryTabs(); renderItemGrid(); };
     nav.appendChild(btn);
   });
+}
+
+// ---------- Swipe left/right between category tabs ----------
+// Attached once to #itemGrid itself (renderItemGrid only replaces its innerHTML, never the
+// element, so the listener survives every re-render). Reads pointer movement without ever
+// calling preventDefault, so normal vertical scrolling and tapping a dish card are both
+// completely unaffected — only a swipe whose movement is clearly horizontal switches category.
+let swipeCtx = null;
+function initCategorySwipe(){
+  const grid = document.getElementById("itemGrid");
+  grid.addEventListener("pointerdown", (e)=>{
+    if(swipeCtx) return; // a second pointer went down mid-gesture — ignore it, don't get confused
+    if(e.pointerType==="mouse" && e.button!==0) return;
+    swipeCtx = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY };
+  });
+  grid.addEventListener("pointerup", (e)=>{
+    if(!swipeCtx || e.pointerId!==swipeCtx.pointerId) return;
+    const dx = e.clientX - swipeCtx.startX;
+    const dy = e.clientY - swipeCtx.startY;
+    swipeCtx = null;
+    // Require a clearly horizontal, deliberate swipe — not a tap (near-zero movement) and not a
+    // vertical scroll of a long item list.
+    if(Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy)*1.5) return;
+    const idx = state.menu.findIndex(c=>c.id===activeCategory);
+    if(idx<0) return;
+    const nextIdx = dx<0 ? idx+1 : idx-1;
+    if(nextIdx<0 || nextIdx>=state.menu.length) return; // no wraparound past the first/last tab
+    activeCategory = state.menu[nextIdx].id;
+    renderCategoryTabs();
+    renderItemGrid();
+  });
+  grid.addEventListener("pointercancel", ()=>{ swipeCtx = null; });
 }
 
 function isCombo(item){
@@ -374,10 +408,17 @@ function renderHeldOrdersList(){
         <div class="hd-detail">${escapeHtml(detail)}</div>
       </div>
       <div class="h-actions">
+        <button class="kitchen">厨房单</button>
         <button class="resume">恢复</button>
         <button class="void">删除</button>
       </div>
     `;
+    row.querySelector(".kitchen").onclick = ()=>{
+      // Held orders don't have an orderNo yet (that's only assigned at checkout) — use the
+      // table/customer label the staff gave it instead, so the kitchen ticket still identifies
+      // which table this is for.
+      printKitchenTicketBT({ orderNo: h.label, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items: h.cart });
+    };
     row.querySelector(".resume").onclick = ()=> resumeHeldOrder(h.id);
     row.querySelector(".void").onclick = ()=>{
       if(confirm(`确定删除挂起的订单「${h.label}」？`)){
@@ -693,6 +734,7 @@ function showReceipt(order, returnToSplitList){
       `).join("")}<hr>`;
   el.innerHTML = `
     <div class="r-shop">${escapeHtml(state.settings.shopName)}</div>
+    ${state.settings.shopAddress ? `<div class="r-meta">${escapeHtml(state.settings.shopAddress)}</div>` : ""}
     <div class="r-meta">订单 ${escapeHtml(order.orderNo)} · ${order.date} ${order.time}</div>
     <hr>
     ${itemsBlock}
@@ -706,7 +748,7 @@ function showReceipt(order, returnToSplitList){
       <div class="r-line"><span>实收</span><span>${fmt(order.cashReceived)}</span></div>
       <div class="r-line"><span>找零</span><span>${fmt(order.change)}</span></div>
     `:""}
-    <div class="r-footer">谢谢光临 ， THANK YOU .</div>
+    ${state.settings.receiptFooterText ? `<div class="r-footer">${escapeHtml(state.settings.receiptFooterText)}</div>` : ""}
   `;
   document.getElementById("btnNewOrder").dataset.returnSplit = returnToSplitList ? "1" : "";
   currentReceiptOrder = order;
@@ -1112,6 +1154,8 @@ function trySubmitPin(){
 
 function populateSettingsForm(){
   document.getElementById("inputShopName").value = state.settings.shopName;
+  document.getElementById("inputShopAddress").value = state.settings.shopAddress || "";
+  document.getElementById("inputReceiptFooter").value = state.settings.receiptFooterText || "";
   document.getElementById("inputTaxEnabled").checked = state.settings.taxEnabled;
   document.getElementById("inputTaxRate").value = state.settings.taxRate;
   document.getElementById("inputDiscountPinRequired").checked = state.settings.discountPinRequired;
@@ -1182,6 +1226,8 @@ function addPromo(){
 
 function saveGeneralSettings(){
   state.settings.shopName = document.getElementById("inputShopName").value.trim() || "Soo's Kitchen";
+  state.settings.shopAddress = document.getElementById("inputShopAddress").value.trim();
+  state.settings.receiptFooterText = document.getElementById("inputReceiptFooter").value.trim();
   state.settings.taxEnabled = document.getElementById("inputTaxEnabled").checked;
   state.settings.taxRate = parseFloat(document.getElementById("inputTaxRate").value) || 0;
   state.settings.discountPinRequired = document.getElementById("inputDiscountPinRequired").checked;
@@ -1853,6 +1899,7 @@ function testPrint(){
 function receiptToPrintBlocks(order){
   const blocks = [];
   blocks.push({ text: state.settings.shopName, size:"lg", bold:true, align:"center" });
+  if(state.settings.shopAddress) blocks.push({ text: state.settings.shopAddress, size:"sm", align:"center" });
   blocks.push({ text: `订单 ${order.orderNo}`, bold:true, align:"center" });
   blocks.push({ text: `${order.date} ${order.time}`, size:"sm", align:"center", spacingAfter:10 });
   order.items.forEach(it=>{
@@ -1872,7 +1919,7 @@ function receiptToPrintBlocks(order){
   if(order.paymentMethod==="cash"){
     blocks.push({ text: `实收 ${fmt(order.cashReceived)}  找零 ${fmt(order.change)}` });
   }
-  blocks.push({ text: "谢谢光临 ， THANK YOU .", align:"center", spacingAfter:6 });
+  if(state.settings.receiptFooterText) blocks.push({ text: state.settings.receiptFooterText, align:"center", spacingAfter:6 });
   return blocks;
 }
 
@@ -2416,6 +2463,7 @@ function init(){
   ensureOrderSeq();
   renderCategoryTabs();
   renderItemGrid();
+  initCategorySwipe();
   renderCart();
   renderHeldBadge();
   renderTrashBadge();

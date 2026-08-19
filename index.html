@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202608142341">
+<link rel="manifest" href="manifest.json?v=202608142342">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202608142341">
-<link rel="icon" href="icon-192.png?v=202608142341">
-<link rel="stylesheet" href="style.css?v=202608142341">
+<link rel="apple-touch-icon" href="icon-192.png?v=202608142342">
+<link rel="icon" href="icon-192.png?v=202608142342">
+<link rel="stylesheet" href="style.css?v=202608142342">
 </head>
 <body>
 
@@ -269,6 +269,12 @@
         <label>店铺名称</label>
         <input type="text" id="inputShopName">
 
+        <label>店铺地址/电话 (显示在收据顶部,留空则不显示)</label>
+        <input type="text" id="inputShopAddress" placeholder="例如：12, Jalan ABC, Ipoh · 012-3456789">
+
+        <label>收据底部文字 (留空则不显示)</label>
+        <input type="text" id="inputReceiptFooter" placeholder="例如：谢谢光临 ， THANK YOU .">
+
         <label class="checkbox-row"><input type="checkbox" id="inputTaxEnabled"> 启用服务税 (SST)</label>
         <label>税率 (%)</label>
         <input type="number" id="inputTaxRate" min="0" max="100" step="0.1">
@@ -381,6 +387,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202608142341" defer></script>
+<script src="app.js?v=202608142342" defer></script>
 </body>
 </html>
