@@ -2177,6 +2177,10 @@ function renderMenuEditor(){
           <div class="ie-line2">
             <button class="avail-toggle" title="上架/售罄">${item.available===false?"🚫":"✅"}</button>
             <input type="number" step="0.10" min="0" value="${item.price}" placeholder="价格">
+            <select class="ie-move-select" title="移到其他分类">
+              <option value="">移到...</option>
+              ${state.menu.filter(c=>c.id!==cat.id).map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}
+            </select>
           </div>
         </div>
       `;
@@ -2185,6 +2189,19 @@ function renderMenuEditor(){
       const nameInput = row.querySelector('input[type="text"]');
       const priceInput = row.querySelector('input[type="number"]');
       const availBtn = row.querySelector(".avail-toggle");
+      const moveSelect = row.querySelector(".ie-move-select");
+      moveSelect.onchange = ()=>{
+        const targetCatId = moveSelect.value;
+        if(!targetCatId) return;
+        const targetCat = state.menu.find(c=>c.id===targetCatId);
+        if(!targetCat) return;
+        cat.items = cat.items.filter(i=>i.id!==item.id);
+        targetCat.items.push(item);
+        saveState();
+        renderMenuEditor();
+        renderItemGridIfNeeded();
+        alertToast(`已把「${item.name}」移到「${targetCat.name}」`);
+      };
       const delBtn = row.querySelector('[data-act="delitem"]');
       const upBtn = row.querySelector('[data-act="moveup"]');
       const downBtn = row.querySelector('[data-act="movedown"]');
