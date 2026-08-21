@@ -612,6 +612,7 @@ function openCheckout(ctx){
   document.getElementById("cashReceived").value = "";
   document.getElementById("changeVal").textContent = fmt(0);
   document.getElementById("btnConfirmCash").disabled = true;
+  document.getElementById("btnConfirmQr").disabled = false;
   buildQuickAmounts();
   switchPayTab("cash");
   const qrImg = document.getElementById("qrImage");
@@ -666,7 +667,27 @@ function updateChange(){
   document.getElementById("btnConfirmCash").disabled = received + 0.001 < total;
 }
 
+let finalizingOrder = false;
 function finalizeOrder(paymentMethod, extra){
+  // Cheap Android WebViews (this app's actual target hardware) are known to double-fire a
+  // touch→click on a single tap — two separate, fully-sequential click events, not a nested
+  // re-entrant call, so a plain in-flight flag alone doesn't catch it (each call finishes before
+  // the next one starts). Disabling both confirm buttons synchronously, before anything else
+  // runs, is what actually blocks a second click from doing anything: a disabled button doesn't
+  // dispatch click at all, whether the second tap is a genuine duplicate touch event or a
+  // deliberate impatient second tap. openCheckout() re-enables them for the next order. The flag
+  // is kept too as a cheap extra guard against any future non-button caller.
+  if(finalizingOrder) return;
+  finalizingOrder = true;
+  document.getElementById("btnConfirmCash").disabled = true;
+  document.getElementById("btnConfirmQr").disabled = true;
+  try{
+    finalizeOrderInner(paymentMethod, extra);
+  }finally{
+    finalizingOrder = false;
+  }
+}
+function finalizeOrderInner(paymentMethod, extra){
   const ctx = checkoutCtx;
   const orderNo = activeOrderNo + (ctx.label ? "-"+ctx.label : "");
   const finalTotal = paymentMethod==="cash" ? ctx.cashDue : ctx.total;
@@ -722,6 +743,12 @@ function maybeAutoPrintKitchen(orderNo, items){
 
 function showReceipt(order, returnToSplitList){
   const el = document.getElementById("receiptContent");
+  // .trim() here, not just truthiness — a whitespace-only value (which can arrive untrimmed via
+  // a cloud-sync merge from another device, or a hand-edited backup JSON import; the settings
+  // form itself already trims on save) is truthy and would otherwise print a blank line with no
+  // visible content and no obvious reason why.
+  const shopAddress = (state.settings.shopAddress||"").trim();
+  const receiptFooterText = (state.settings.receiptFooterText||"").trim();
   const isEqualSplit = order.isSplit && order.splitKind==="equal";
   const comboLine = it => it.comboContents && it.comboContents.length
     ? `<div class="r-line" style="padding:0 0 4px 12px;"><span style="font-size:12px;color:var(--text-mute);">含: ${escapeHtml(comboContentsLabel(it.comboContents, it.qty))}</span></div>`
@@ -734,7 +761,7 @@ function showReceipt(order, returnToSplitList){
       `).join("")}<hr>`;
   el.innerHTML = `
     <div class="r-shop">${escapeHtml(state.settings.shopName)}</div>
-    ${state.settings.shopAddress ? `<div class="r-meta">${escapeHtml(state.settings.shopAddress)}</div>` : ""}
+    ${shopAddress ? `<div class="r-meta">${escapeHtml(shopAddress)}</div>` : ""}
     <div class="r-meta">订单 ${escapeHtml(order.orderNo)} · ${order.date} ${order.time}</div>
     <hr>
     ${itemsBlock}
@@ -748,7 +775,7 @@ function showReceipt(order, returnToSplitList){
       <div class="r-line"><span>实收</span><span>${fmt(order.cashReceived)}</span></div>
       <div class="r-line"><span>找零</span><span>${fmt(order.change)}</span></div>
     `:""}
-    ${state.settings.receiptFooterText ? `<div class="r-footer">${escapeHtml(state.settings.receiptFooterText)}</div>` : ""}
+    ${receiptFooterText ? `<div class="r-footer">${escapeHtml(receiptFooterText)}</div>` : ""}
   `;
   document.getElementById("btnNewOrder").dataset.returnSplit = returnToSplitList ? "1" : "";
   currentReceiptOrder = order;
@@ -880,6 +907,14 @@ function reopenOrder(orderNo){
       return { itemId: menuItem ? menuItem.id : "reopen_"+it.name, name: it.name, price: menuItem ? menuItem.price : it.price, qty: it.qty, note: it.note||"", comboContents: it.comboContents||[] };
     });
     resetOrderState();
+    // resetOrderState() nulls `discount` — resumeHeldOrder() (its sibling for 挂单) restores it
+    // afterward, this didn't, so reopening a discounted order silently dropped the discount and
+    // could overcharge the customer if staff didn't notice and manually reapply it. A finalized
+    // order only kept the resolved dollar amount (ord.discount), not the original percent/amount
+    // type, so this reconstructs it as a fixed-amount discount of that same value — the discount
+    // percentage itself can't be recovered, but the dollar impact the customer already agreed to
+    // is preserved if the cart is reopened unchanged.
+    discount = ord.discount>0 ? { type:"amount", value: ord.discount, name: ord.discountName || null } : null;
     renderCart();
     hideModal("historyModal");
     // Surface the reopened cart immediately (relevant on mobile widths where the cart pane is
@@ -901,6 +936,7 @@ let activeSplitGroupIdx = 0;
 function openSplitModal(){
   if(cart.length===0) return;
   if(blockIfSplitInProgress()) return;
+  document.getElementById("btnConfirmSplit").disabled = false;
   splitMode = "equal";
   splitEqualN = 2;
   document.querySelectorAll("#splitModal .pay-tab").forEach(b=>b.classList.toggle("active", b.dataset.split==="equal"));
@@ -1012,7 +1048,22 @@ function addSplitGroup(){
   renderSplitItems();
 }
 
+let confirmingSplit = false;
 function confirmSplit(){
+  // Same double-fire-touch risk as finalizeOrder() — disabling the button is what actually stops
+  // a second sequential click (see the comment on finalizeOrder for why a flag alone isn't
+  // enough); without it a re-entrant call here would rebuild splitGroups from scratch (discarding
+  // any paid:true progress already recorded) and reprint the kitchen ticket a second time.
+  if(confirmingSplit) return;
+  confirmingSplit = true;
+  document.getElementById("btnConfirmSplit").disabled = true;
+  try{
+    confirmSplitInner();
+  }finally{
+    confirmingSplit = false;
+  }
+}
+function confirmSplitInner(){
   const cartSub = cartSubtotal();
   const totalDiscount = discountAmount();
   const taxEnabled = state.settings.taxEnabled;
@@ -1347,6 +1398,16 @@ function genShopId(){
 function cloudSyncableSnapshot(){
   const settings = Object.assign({}, state.settings);
   delete settings.pin;
+  // deviceLabel and paperWidth are properties of THIS physical till, not of the shop's shared
+  // menu/settings — deviceLabel exists specifically so different tills don't generate colliding
+  // order numbers (see peekOrderNo()), and paperWidth matches whatever printer is physically
+  // paired with this device. Syncing either would let one till's setting silently overwrite
+  // another's: two tills could end up sharing the same deviceLabel (reintroducing the exact
+  // order-number collision the per-device label exists to prevent), or a till with an 80mm
+  // printer could get its paper width flipped to 58mm by a sync from a different till, garbling
+  // every print until someone notices.
+  delete settings.deviceLabel;
+  delete settings.paperWidth;
   return {
     settings: settings,
     menu: state.menu,
@@ -1791,7 +1852,11 @@ function renderTicketCanvas(blocks){
     const weight = b.bold ? "700" : "400";
     mctx.font = `${weight} ${size}px "Microsoft YaHei","PingFang SC",sans-serif`;
     const maxW = width - 24;
-    const words = (b.text||"").split("");
+    // Array.from() (not .split("")) — splits by Unicode code point, not UTF-16 code unit, so an
+    // emoji or rare supplementary-plane character (e.g. a shop owner typing "😊" into the
+    // receipt footer) stays as one character instead of breaking into two lone surrogates that
+    // measureText/fillText draw as garbled/missing glyphs.
+    const words = Array.from(b.text||"");
     let line = "";
     const linesForBlock = [];
     words.forEach(ch=>{
@@ -1898,8 +1963,10 @@ function testPrint(){
 
 function receiptToPrintBlocks(order){
   const blocks = [];
+  const shopAddress = (state.settings.shopAddress||"").trim();
+  const receiptFooterText = (state.settings.receiptFooterText||"").trim();
   blocks.push({ text: state.settings.shopName, size:"lg", bold:true, align:"center" });
-  if(state.settings.shopAddress) blocks.push({ text: state.settings.shopAddress, size:"sm", align:"center" });
+  if(shopAddress) blocks.push({ text: shopAddress, size:"sm", align:"center" });
   blocks.push({ text: `订单 ${order.orderNo}`, bold:true, align:"center" });
   blocks.push({ text: `${order.date} ${order.time}`, size:"sm", align:"center", spacingAfter:10 });
   order.items.forEach(it=>{
@@ -1919,7 +1986,7 @@ function receiptToPrintBlocks(order){
   if(order.paymentMethod==="cash"){
     blocks.push({ text: `实收 ${fmt(order.cashReceived)}  找零 ${fmt(order.change)}` });
   }
-  if(state.settings.receiptFooterText) blocks.push({ text: state.settings.receiptFooterText, align:"center", spacingAfter:6 });
+  if(receiptFooterText) blocks.push({ text: receiptFooterText, align:"center", spacingAfter:6 });
   return blocks;
 }
 
@@ -2195,6 +2262,12 @@ function renderMenuEditor(){
         if(!targetCatId) return;
         const targetCat = state.menu.find(c=>c.id===targetCatId);
         if(!targetCat) return;
+        // Guard against a double-fired "change" event (a known quirk on some older Android
+        // WebViews) inserting the same item object twice: if it's already gone from `cat.items`,
+        // this move already happened — do nothing rather than pushing a second reference into
+        // targetCat.items, which would render as two rows for one dish and make a later
+        // delete/move on either one silently remove both (they're the same object).
+        if(!cat.items.includes(item)) return;
         cat.items = cat.items.filter(i=>i.id!==item.id);
         targetCat.items.push(item);
         saveState();
@@ -2238,7 +2311,16 @@ function renderMenuEditor(){
     });
 
     box.querySelector('[data-act="delcat"]').onclick = ()=>{
-      if(!confirm(`确定删除分类「${cat.name}」及其所有菜品?`)) return;
+      // Same combo-breakage check delitem does for a single dish, applied to every dish this
+      // category is about to take with it — deleting a category doesn't just remove its own
+      // items, it can silently shrink a combo that lives in a completely different category.
+      const usedInCombos = [...new Set(
+        cat.items.filter(i=>!isCombo(i)).flatMap(i=>findCombosUsingItem(i.id))
+      )];
+      const comboWarning = usedInCombos.length
+        ? `\n\n注意:这个分类里有菜品是「${usedInCombos.join("、")}」套餐的内容之一,删除后套餐里会少这些菜品。`
+        : "";
+      if(!confirm(`确定删除分类「${cat.name}」及其所有菜品?${comboWarning}`)) return;
       state.menu = state.menu.filter(c=>c.id!==cat.id);
       pushToTrash("category", cat, {});
       if(activeCategory===cat.id){ activeCategory = state.menu[0]?state.menu[0].id:null; }
