@@ -2043,12 +2043,17 @@ function canvasToEscPosRaster(canvas){
 }
 
 const ESC_INIT = new Uint8Array([0x1B,0x40]);
-// 2 line feeds (0x0A) before the cut (0x1D,0x56,0x00) — just enough blank paper to clear a
-// typical auto-cutter without slicing into the last printed line. This used to be 4, which,
-// stacked on top of the ~30px bottom margin already baked into the rendered receipt image
-// itself (see renderTicketCanvas), was most of what made the printed blank space look so large
-// — the receipt-image spacing fix alone didn't touch this separate, printer-level feed.
-const ESC_FEED_CUT = new Uint8Array([0x0A,0x0A,0x1D,0x56,0x00]);
+// The short "GS V 0" full-cut form (0x1D,0x56,0x00) has no feed-amount parameter — how much
+// blank paper it advances before cutting is entirely up to the printer's own firmware default,
+// which is why trimming our own line feeds before it (a prior fix, still kept below) made no
+// visible difference: those bytes aren't what the printer was using to decide the gap size.
+// "GS V 66 n" (0x1D,0x56,0x42,n) is the newer form that lets us say explicitly: n=0 means feed
+// only to the minimum cutting position, nothing extra, then partial-cut. This is a real ESC/POS
+// spec command, but cheap generic thermal printer clones (like this shop's MPT-II-30B7) often
+// only implement the older 3-byte forms — if this printer doesn't recognize it, the cut simply
+// won't happen (paper needs to be torn by hand) rather than anything damaging. If that happens,
+// revert this line back to `new Uint8Array([0x0A,0x0A,0x1D,0x56,0x00])`.
+const ESC_FEED_CUT = new Uint8Array([0x0A,0x0A,0x1D,0x56,0x42,0x00]);
 
 async function printBlocks(blocks){
   if(!btPrinterChar){
