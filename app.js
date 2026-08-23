@@ -621,19 +621,21 @@ function openCheckout(ctx){
   buildQuickAmounts();
   switchPayTab("cash");
   const qrImg = document.getElementById("qrImage");
+  // Deliberately NOT requiring a QR image before allowing 确认已收到付款: in-person payment
+  // confirmation doesn't necessarily go through this app's own displayed QR at all — staff may
+  // be looking at the customer's own payment-success screen, or a separate physical QR sticker
+  // on the counter, and judging for themselves that payment happened. Uploading a QR here is a
+  // convenience for showing the customer something to scan, not a precondition for staff being
+  // able to confirm what they already witnessed.
   if(state.settings.qrImage){
     qrImg.src = state.settings.qrImage;
     qrImg.style.display = "block";
     document.getElementById("qrHint").textContent = "出示二维码给顾客扫描付款";
-    document.getElementById("btnConfirmQr").disabled = false;
   }else{
-    // Without a QR uploaded there's nothing on screen for the customer to actually scan — this
-    // used to leave the confirm button enabled anyway, letting a cashier record a QR/e-wallet
-    // payment as complete with no way for the customer to have paid it.
     qrImg.style.display = "none";
     document.getElementById("qrHint").textContent = "尚未设置收款二维码,请到「设置」上传";
-    document.getElementById("btnConfirmQr").disabled = true;
   }
+  document.getElementById("btnConfirmQr").disabled = false;
   showModal("checkoutModal");
 }
 
