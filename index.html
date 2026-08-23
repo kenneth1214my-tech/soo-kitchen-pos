@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202608221030">
+<link rel="manifest" href="manifest.json?v=202608231200">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202608221030">
-<link rel="icon" href="icon-192.png?v=202608221030">
-<link rel="stylesheet" href="style.css?v=202608221030">
+<link rel="apple-touch-icon" href="icon-192.png?v=202608231200">
+<link rel="icon" href="icon-192.png?v=202608231200">
+<link rel="stylesheet" href="style.css?v=202608231200">
 </head>
 <body>
 
@@ -282,10 +282,12 @@
         <label>DuitNow / 电子钱包 收款二维码</label>
         <input type="file" id="inputQrFile" accept="image/*">
         <img id="qrPreview" class="qr-preview hidden">
+        <button id="btnRemoveQr" class="secondary-btn hidden" style="margin-top:8px;">移除二维码</button>
 
         <label>线上预订二维码 (会印在收据底部,留空则不印)</label>
         <input type="file" id="inputOnlineOrderQrFile" accept="image/*">
         <img id="onlineOrderQrPreview" class="qr-preview hidden">
+        <button id="btnRemoveOnlineOrderQr" class="secondary-btn hidden" style="margin-top:8px;">移除二维码</button>
 
         <label class="checkbox-row"><input type="checkbox" id="inputDiscountPinRequired"> 熟客折扣需要管理密码确认</label>
 
@@ -294,6 +296,7 @@
 
         <label>修改管理密码</label>
         <input type="password" inputmode="numeric" id="inputNewPin" placeholder="新密码 (至少4位数字)">
+        <p id="defaultPinWarning" class="hint hidden" style="text-align:left;color:var(--danger);">⚠️ 目前还在用系统预设密码 0000,建议正式营业前改成只有你知道的密码,不然员工或顾客都能猜到、打开设置看到营业额和修改菜单。</p>
 
         <button id="btnSaveGeneral" class="primary-btn">保存设置</button>
 
@@ -345,6 +348,7 @@
       </div>
 
       <div id="tabMenu" class="settings-panel hidden">
+        <p id="sampleMenuWarning" class="hint hidden" style="text-align:left;color:var(--danger);">⚠️ 目前的菜单还是系统内建的示范菜单(招牌炒饭/咖喱鸡饭等),不是你店里真正卖的东西——正式营业前记得改成你自己的菜单。</p>
         <div class="menu-editor-actions">
           <button id="btnAddCategory" class="secondary-btn">+ 新增分类</button>
         </div>
@@ -392,6 +396,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202608221030" defer></script>
+<script src="app.js?v=202608231200" defer></script>
 </body>
 </html>

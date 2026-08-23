@@ -277,16 +277,21 @@ function clearCart(){
   resetOrderState();
   renderCart();
 }
-function cartSubtotal(){ return cart.reduce((s,c)=>s+c.price*c.qty,0); }
+// round2() at every step (not just at the end) — these values flow straight into order.subtotal/
+// discount/tax/total (finalizeOrderInner) and then into the CSV export with no further rounding
+// there, so floating-point noise (e.g. 3.5000000000000004 from summing cart line prices) used to
+// surface directly in exported accounting records. The split-bill path already did this
+// consistently at every computed field; this brings the main (non-split) cart path in line.
+function cartSubtotal(){ return round2(cart.reduce((s,c)=>s+c.price*c.qty,0)); }
 function discountAmount(){
   if(!discount) return 0;
   const sub = cartSubtotal();
   let amt = discount.type==="percent" ? sub*discount.value/100 : discount.value;
-  return Math.min(Math.max(amt,0), sub);
+  return round2(Math.min(Math.max(amt,0), sub));
 }
-function discountedSubtotal(){ return cartSubtotal() - discountAmount(); }
-function cartTax(){ return state.settings.taxEnabled ? discountedSubtotal()*state.settings.taxRate/100 : 0; }
-function cartTotal(){ return discountedSubtotal()+cartTax(); }
+function discountedSubtotal(){ return round2(cartSubtotal() - discountAmount()); }
+function cartTax(){ return state.settings.taxEnabled ? round2(discountedSubtotal()*state.settings.taxRate/100) : 0; }
+function cartTotal(){ return round2(discountedSubtotal()+cartTax()); }
 function cartCount(){ return cart.reduce((s,c)=>s+c.qty,0); }
 
 function renderCart(){
@@ -613,7 +618,6 @@ function openCheckout(ctx){
   document.getElementById("cashReceived").value = "";
   document.getElementById("changeVal").textContent = fmt(0);
   document.getElementById("btnConfirmCash").disabled = true;
-  document.getElementById("btnConfirmQr").disabled = false;
   buildQuickAmounts();
   switchPayTab("cash");
   const qrImg = document.getElementById("qrImage");
@@ -621,9 +625,14 @@ function openCheckout(ctx){
     qrImg.src = state.settings.qrImage;
     qrImg.style.display = "block";
     document.getElementById("qrHint").textContent = "出示二维码给顾客扫描付款";
+    document.getElementById("btnConfirmQr").disabled = false;
   }else{
+    // Without a QR uploaded there's nothing on screen for the customer to actually scan — this
+    // used to leave the confirm button enabled anyway, letting a cashier record a QR/e-wallet
+    // payment as complete with no way for the customer to have paid it.
     qrImg.style.display = "none";
     document.getElementById("qrHint").textContent = "尚未设置收款二维码,请到「设置」上传";
+    document.getElementById("btnConfirmQr").disabled = true;
   }
   showModal("checkoutModal");
 }
@@ -1061,6 +1070,13 @@ function confirmSplit(){
   // a second sequential click (see the comment on finalizeOrder for why a flag alone isn't
   // enough); without it a re-entrant call here would rebuild splitGroups from scratch (discarding
   // any paid:true progress already recorded) and reprint the kitchen ticket a second time.
+  //
+  // Re-enabling in `finally` (not left disabled until the next openSplitModal()) matters because
+  // confirmSplitInner() has two common validation failures — "还有 N 项未分配到账单" and "至少需要
+  // 2 个账单" — that return early without ever hiding splitModal. Those aren't rare error paths,
+  // they're the everyday case of a cashier splitting a bill by item and forgetting one dish; the
+  // button must still work on the very next tap after fixing it, not require abandoning the
+  // whole split and starting over.
   if(confirmingSplit) return;
   confirmingSplit = true;
   document.getElementById("btnConfirmSplit").disabled = true;
@@ -1068,6 +1084,7 @@ function confirmSplit(){
     confirmSplitInner();
   }finally{
     confirmingSplit = false;
+    document.getElementById("btnConfirmSplit").disabled = false;
   }
 }
 function confirmSplitInner(){
@@ -1107,6 +1124,14 @@ function confirmSplitInner(){
     }
     if(splitDraftGroups.length<2){
       alertToast("至少需要 2 个账单");
+      return;
+    }
+    // Every unit being assigned to *some* group (checked above) doesn't guarantee every group
+    // got at least one — a group added by mistake (or after a guest cancels) and left empty
+    // would otherwise sail through as a working RM0.00 "结账" button in the split-pay list.
+    const emptyGroup = splitDraftGroups.find((g, idx)=> !splitUnits.some(u=>splitUnitAssign[u.unitKey]===idx));
+    if(emptyGroup){
+      alertToast(`账单「${emptyGroup.label}」还没有分配任何菜品`);
       return;
     }
     groups = splitDraftGroups.map((g, idx)=>{
@@ -1221,6 +1246,7 @@ function populateSettingsForm(){
   document.getElementById("inputPaperWidth").value = state.settings.paperWidth || "58";
   document.getElementById("inputAutoPrintKitchen").checked = state.settings.autoPrintKitchen!==false;
   document.getElementById("inputNewPin").value = "";
+  document.getElementById("defaultPinWarning").classList.toggle("hidden", state.settings.pin!=="0000");
   updatePrinterStatus();
   if(!navigator.bluetooth){
     document.getElementById("btnConnectPrinter").disabled = true;
@@ -1228,18 +1254,24 @@ function populateSettingsForm(){
     document.getElementById("printerStatus").textContent = "此浏览器不支持蓝牙打印 (iOS/Safari 不支持,请用 Android + Chrome)";
   }
   const preview = document.getElementById("qrPreview");
+  const removeQrBtn = document.getElementById("btnRemoveQr");
   if(state.settings.qrImage){
     preview.src = state.settings.qrImage;
     preview.classList.remove("hidden");
+    removeQrBtn.classList.remove("hidden");
   }else{
     preview.classList.add("hidden");
+    removeQrBtn.classList.add("hidden");
   }
   const onlineOrderPreview = document.getElementById("onlineOrderQrPreview");
+  const removeOnlineOrderQrBtn = document.getElementById("btnRemoveOnlineOrderQr");
   if(state.settings.onlineOrderQrImage){
     onlineOrderPreview.src = state.settings.onlineOrderQrImage;
     onlineOrderPreview.classList.remove("hidden");
+    removeOnlineOrderQrBtn.classList.remove("hidden");
   }else{
     onlineOrderPreview.classList.add("hidden");
+    removeOnlineOrderQrBtn.classList.add("hidden");
   }
   renderMenuEditor();
   renderComboListEditor();
@@ -1307,27 +1339,34 @@ function saveGeneralSettings(){
   alertToast("设置已保存");
 }
 
+// Both QR uploads below go through resizeImageFile rather than a raw FileReader: this QR is
+// shown on-screen during checkout AND synced to Firestore alongside the rest of settings (verify
+// via cloudSyncableSnapshot — only pin/deviceLabel/paperWidth are excluded from that sync), so an
+// uncompressed multi-MB phone photo would risk pushing the synced document over Firestore's
+// 1MiB limit. 500px/0.9 quality keeps a QR's modules crisp enough to stay scannable.
 function handleQrFile(e){
   const file = e.target.files[0];
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ()=>{
-    state.settings.qrImage = reader.result;
+  resizeImageFile(file, 500, 0.9, dataUrl=>{
+    state.settings.qrImage = dataUrl;
     saveState();
     const preview = document.getElementById("qrPreview");
-    preview.src = reader.result;
+    preview.src = dataUrl;
     preview.classList.remove("hidden");
+    document.getElementById("btnRemoveQr").classList.remove("hidden");
     alertToast("二维码已更新");
-  };
-  reader.readAsDataURL(file);
+  });
+}
+function removeQrFile(){
+  if(!confirm("确定移除收款二维码?")) return;
+  state.settings.qrImage = "";
+  saveState();
+  document.getElementById("qrPreview").classList.add("hidden");
+  document.getElementById("btnRemoveQr").classList.add("hidden");
+  document.getElementById("inputQrFile").value = "";
+  alertToast("收款二维码已移除");
 }
 
-// Unlike handleQrFile above (raw, uncompressed — that QR is only ever shown on-screen during
-// checkout, never synced), this one goes through resizeImageFile: it also gets printed on every
-// receipt AND synced to Firestore alongside the rest of settings, so an uncompressed multi-MB
-// phone photo here would both bloat every print job and risk pushing the synced document over
-// Firestore's 1MiB limit (a real risk already flagged for the similarly-unbounded qrImage field).
-// 500px/0.9 quality keeps the QR's modules crisp enough to stay scannable after compression.
 function handleOnlineOrderQrFile(e){
   const file = e.target.files[0];
   if(!file) return;
@@ -1337,8 +1376,18 @@ function handleOnlineOrderQrFile(e){
     const preview = document.getElementById("onlineOrderQrPreview");
     preview.src = dataUrl;
     preview.classList.remove("hidden");
+    document.getElementById("btnRemoveOnlineOrderQr").classList.remove("hidden");
     alertToast("线上预订二维码已更新");
   });
+}
+function removeOnlineOrderQrFile(){
+  if(!confirm("确定移除线上预订二维码?移除后收据将不再印出这个二维码。")) return;
+  state.settings.onlineOrderQrImage = "";
+  saveState();
+  document.getElementById("onlineOrderQrPreview").classList.add("hidden");
+  document.getElementById("btnRemoveOnlineOrderQr").classList.add("hidden");
+  document.getElementById("inputOnlineOrderQrFile").value = "";
+  alertToast("线上预订二维码已移除");
 }
 
 // ---------- Backup / restore ----------
@@ -1788,6 +1837,8 @@ const PRINTER_SERVICE_CANDIDATES = [
 ];
 let btPrinterDevice = null;
 let btPrinterChar = null;
+let rememberedBtDevice = null;
+const btListenerAttachedDevices = new WeakSet();
 
 function updatePrinterStatus(){
   const el = document.getElementById("printerStatus");
@@ -1834,11 +1885,25 @@ async function connectToBluetoothDevice(device){
 
   btPrinterDevice = device;
   btPrinterChar = writableChar;
-  device.addEventListener("gattserverdisconnected", ()=>{
-    btPrinterChar = null;
-    updatePrinterStatus();
-    alertToast("打印机已断开连接");
-  });
+  // Guard against attaching this listener more than once to the same device object — this
+  // function runs on every (re)connect, and rememberedBtDevice is the SAME object reused across
+  // every reconnectRememberedPrinter() call, so without this a flaky printer that drops and
+  // reconnects several times over a shift accumulates one more listener each time, and a single
+  // real disconnect later fires the toast/reset N times instead of once.
+  if(!btListenerAttachedDevices.has(device)){
+    device.addEventListener("gattserverdisconnected", ()=>{
+      btPrinterChar = null;
+      updatePrinterStatus();
+      alertToast("打印机已断开连接");
+    });
+    btListenerAttachedDevices.add(device);
+  }
+  // Whatever device we just successfully connected to IS the one worth remembering for a future
+  // reconnect — covers both "this was the very first pairing this session" (rememberedBtDevice
+  // was never populated by checkForRememberedPrinter, since that only runs once at init) and "the
+  // shop swapped to a different physical printer mid-shift" (the old rememberedBtDevice would
+  // otherwise stay pointed at hardware no longer in use).
+  rememberedBtDevice = device;
   updatePrinterStatus();
 }
 
@@ -1866,7 +1931,6 @@ async function connectBluetoothPrinter(){
 // server still needs an explicit tap in this app rather than happening silently on page load,
 // both because gatt.connect() is more reliable right after a real user gesture on some Android
 // WebViews, and so staff always get a visible confirmation of which printer just came online.
-let rememberedBtDevice = null;
 async function checkForRememberedPrinter(){
   if(!navigator.bluetooth || !navigator.bluetooth.getDevices) return;
   try{
@@ -1933,7 +1997,15 @@ async function renderTicketCanvas(blocks){
   const wrapped = [];
   for(const b of blocks){
     if(b.image){
-      const img = await loadImageEl(b.image);
+      let img;
+      try{
+        img = await loadImageEl(b.image);
+      }catch(e){
+        // A corrupted/truncated image (e.g. localStorage or a cloud-sync write got interrupted
+        // partway) used to abort the whole print job right here — no receipt at all, not even
+        // the items and total, over one bad image block. Skip just this block instead.
+        continue;
+      }
       const maxW = width - 24;
       // Cap the printed QR at a fixed target width (falls back to the image's own width if
       // smaller) rather than printing it at full paper width — a QR that large would be
@@ -2138,9 +2210,15 @@ function printReceiptBT(order){ return printBlocks(receiptToPrintBlocks(order));
 function printKitchenTicketBT(order){ return printBlocks(kitchenTicketToPrintBlocks(order)); }
 
 function resizeImageFile(file, maxSize, quality, callback){
+  // Neither failure path used to be handled at all: picking a non-image or corrupted file left
+  // img.onload silently never firing — callback never runs, but no error shown either, so the
+  // person has no idea their upload didn't work until they notice the old (or no) image is still
+  // in place later. A toast here is cheap and turns a silent no-op into visible feedback.
   const reader = new FileReader();
+  reader.onerror = ()=> alertToast("图片读取失败,请换一张试试");
   reader.onload = (e)=>{
     const img = new Image();
+    img.onerror = ()=> alertToast("这个文件看起来不是有效的图片,请换一张试试");
     img.onload = ()=>{
       let w = img.width, h = img.height;
       const scale = Math.min(1, maxSize/Math.max(w,h));
@@ -2335,8 +2413,19 @@ function reorderMenuItem(cat, item, targetVisIdx){
   renderItemGridIfNeeded();
 }
 
+// True as long as every item ID from DEFAULT_STATE's built-in demo menu (i1-i7) is still present
+// somewhere in the live menu — a cheap, low-false-positive way to tell "still untouched sample
+// data" from "a real menu" without deep-comparing names/prices a shop might legitimately reuse
+// (e.g. they might genuinely also sell 矿泉水). Deleting or renaming any one demo item already
+// breaks this check, so it stops warning the moment real editing begins.
+function looksLikeSampleMenu(){
+  const allIds = new Set(state.menu.flatMap(cat=>cat.items.map(i=>i.id)));
+  return ["i1","i2","i3","i4","i5","i6","i7"].every(id=>allIds.has(id));
+}
+
 function renderMenuEditor(){
   const container = document.getElementById("categoryEditorList");
+  document.getElementById("sampleMenuWarning").classList.toggle("hidden", !looksLikeSampleMenu());
   container.innerHTML = "";
   state.menu.forEach(cat=>{
     const box = document.createElement("div");
@@ -2802,7 +2891,9 @@ function init(){
   });
   document.getElementById("btnSaveGeneral").onclick = saveGeneralSettings;
   document.getElementById("inputQrFile").addEventListener("change", handleQrFile);
+  document.getElementById("btnRemoveQr").onclick = removeQrFile;
   document.getElementById("inputOnlineOrderQrFile").addEventListener("change", handleOnlineOrderQrFile);
+  document.getElementById("btnRemoveOnlineOrderQr").onclick = removeOnlineOrderQrFile;
   document.getElementById("btnAddCategory").onclick = addCategory;
   document.getElementById("btnAddPromo").onclick = addPromo;
   document.getElementById("btnGenShopId").onclick = ()=>{ document.getElementById("cloudShopIdInput").value = genShopId(); };
