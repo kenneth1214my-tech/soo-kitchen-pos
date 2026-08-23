@@ -1940,7 +1940,7 @@ async function renderTicketCanvas(blocks){
       // pointlessly oversized and waste paper on an 80mm roll.
       const targetW = Math.min(b.width || 180, maxW, img.naturalWidth || img.width);
       const targetH = Math.round((img.naturalHeight || img.height) * (targetW / (img.naturalWidth || img.width)));
-      wrapped.push({ type:"image", img, w: targetW, h: targetH, align: b.align||"center" });
+      wrapped.push({ type:"image", img, w: targetW, h: targetH, align: b.align||"center", spacingAfter: b.spacingAfter||0 });
       totalHeight += targetH;
       if(b.spacingAfter) totalHeight += b.spacingAfter;
       continue;
@@ -1966,8 +1966,11 @@ async function renderTicketCanvas(blocks){
       }
     });
     linesForBlock.push(line);
-    linesForBlock.forEach(l=>{
-      wrapped.push({ type:"text", text:l, size, weight, align: b.align||"left" });
+    linesForBlock.forEach((l,idx)=>{
+      // Only the LAST wrapped line of a multi-line block carries its spacingAfter — that gap
+      // belongs once, after the whole block, not repeated after every wrapped line within it.
+      const isLast = idx===linesForBlock.length-1;
+      wrapped.push({ type:"text", text:l, size, weight, align: b.align||"left", spacingAfter: isLast ? (b.spacingAfter||0) : 0 });
       totalHeight += size + 10;
     });
     if(b.spacingAfter) totalHeight += b.spacingAfter;
@@ -1983,6 +1986,13 @@ async function renderTicketCanvas(blocks){
   ctx.fillStyle = "#000";
   ctx.textBaseline = "top";
 
+  // Bug fix: this loop used to only ever advance y by each line's own height, never by its
+  // block's spacingAfter — so the extra room reserved for it in totalHeight above was real
+  // canvas space that nothing ever drew into, all of it landing as one big blank gap at the very
+  // bottom of the ticket (right before the cut) instead of as breathing room between sections.
+  // Every block with a spacingAfter (order date, the item/total divider, 总计, the receipt
+  // footer, the online-order QR...) was contributing to that same dead space, so it added up to
+  // a genuinely large blank area, not a cosmetic rounding difference.
   let y = 16;
   for(let i=0;i<wrapped.length;i++){
     const w = wrapped[i];
@@ -1991,7 +2001,7 @@ async function renderTicketCanvas(blocks){
       if(w.align==="center") ix = Math.max(12, (width-w.w)/2);
       else if(w.align==="right") ix = Math.max(12, width-w.w-12);
       ctx.drawImage(w.img, ix, y, w.w, w.h);
-      y += w.h;
+      y += w.h + w.spacingAfter;
       continue;
     }
     ctx.font = `${w.weight} ${w.size}px "Microsoft YaHei","PingFang SC",sans-serif`;
@@ -2000,7 +2010,7 @@ async function renderTicketCanvas(blocks){
     if(w.align==="center") x = Math.max(12, (width-tw)/2);
     else if(w.align==="right") x = Math.max(12, width-tw-12);
     ctx.fillText(w.text, x, y);
-    y += w.size + 10;
+    y += w.size + 10 + w.spacingAfter;
   }
   return canvas;
 }
