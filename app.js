@@ -2043,7 +2043,12 @@ function canvasToEscPosRaster(canvas){
 }
 
 const ESC_INIT = new Uint8Array([0x1B,0x40]);
-const ESC_FEED_CUT = new Uint8Array([0x0A,0x0A,0x0A,0x0A,0x1D,0x56,0x00]);
+// 2 line feeds (0x0A) before the cut (0x1D,0x56,0x00) — just enough blank paper to clear a
+// typical auto-cutter without slicing into the last printed line. This used to be 4, which,
+// stacked on top of the ~30px bottom margin already baked into the rendered receipt image
+// itself (see renderTicketCanvas), was most of what made the printed blank space look so large
+// — the receipt-image spacing fix alone didn't touch this separate, printer-level feed.
+const ESC_FEED_CUT = new Uint8Array([0x0A,0x0A,0x1D,0x56,0x00]);
 
 async function printBlocks(blocks){
   if(!btPrinterChar){
