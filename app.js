@@ -1791,12 +1791,55 @@ let btPrinterChar = null;
 
 function updatePrinterStatus(){
   const el = document.getElementById("printerStatus");
+  const btnReconnect = document.getElementById("btnReconnectPrinter");
   if(!el) return;
   if(btPrinterChar){
     el.textContent = "已连接: " + (btPrinterDevice && btPrinterDevice.name ? btPrinterDevice.name : "蓝牙打印机");
+    if(btnReconnect) btnReconnect.classList.add("hidden");
+  }else if(rememberedBtDevice){
+    el.textContent = "尚未连接 — 检测到上次配对过的打印机「" + (rememberedBtDevice.name||"未知设备") + "」";
+    if(btnReconnect) btnReconnect.classList.remove("hidden");
   }else{
     el.textContent = "尚未连接打印机";
+    if(btnReconnect) btnReconnect.classList.add("hidden");
   }
+}
+
+// Shared by both a fresh pairing (device came from requestDevice(), a brand-new picker
+// selection) and a reconnect to a remembered device (device came from getDevices(), no picker
+// shown at all) — everything past "we have a BluetoothDevice object" is identical either way.
+async function connectToBluetoothDevice(device){
+  const server = await device.gatt.connect();
+  let writableChar = null;
+
+  for(const svcUuid of PRINTER_SERVICE_CANDIDATES){
+    try{
+      const service = await server.getPrimaryService(svcUuid);
+      const chars = await service.getCharacteristics();
+      writableChar = chars.find(c=>c.properties.write || c.properties.writeWithoutResponse);
+      if(writableChar) break;
+    }catch(e){ /* this service isn't on this device, try next candidate */ }
+  }
+  if(!writableChar){
+    try{
+      const services = await server.getPrimaryServices();
+      for(const service of services){
+        const chars = await service.getCharacteristics();
+        writableChar = chars.find(c=>c.properties.write || c.properties.writeWithoutResponse);
+        if(writableChar) break;
+      }
+    }catch(e){ /* some devices refuse to enumerate all services */ }
+  }
+  if(!writableChar) throw new Error("找不到可写入的蓝牙通道,此打印机可能不兼容 Web Bluetooth");
+
+  btPrinterDevice = device;
+  btPrinterChar = writableChar;
+  device.addEventListener("gattserverdisconnected", ()=>{
+    btPrinterChar = null;
+    updatePrinterStatus();
+    alertToast("打印机已断开连接");
+  });
+  updatePrinterStatus();
 }
 
 async function connectBluetoothPrinter(){
@@ -1809,41 +1852,37 @@ async function connectBluetoothPrinter(){
       acceptAllDevices: true,
       optionalServices: PRINTER_SERVICE_CANDIDATES
     });
-    const server = await device.gatt.connect();
-    let writableChar = null;
-
-    for(const svcUuid of PRINTER_SERVICE_CANDIDATES){
-      try{
-        const service = await server.getPrimaryService(svcUuid);
-        const chars = await service.getCharacteristics();
-        writableChar = chars.find(c=>c.properties.write || c.properties.writeWithoutResponse);
-        if(writableChar) break;
-      }catch(e){ /* this service isn't on this device, try next candidate */ }
-    }
-    if(!writableChar){
-      try{
-        const services = await server.getPrimaryServices();
-        for(const service of services){
-          const chars = await service.getCharacteristics();
-          writableChar = chars.find(c=>c.properties.write || c.properties.writeWithoutResponse);
-          if(writableChar) break;
-        }
-      }catch(e){ /* some devices refuse to enumerate all services */ }
-    }
-    if(!writableChar) throw new Error("找不到可写入的蓝牙通道,此打印机可能不兼容 Web Bluetooth");
-
-    btPrinterDevice = device;
-    btPrinterChar = writableChar;
-    device.addEventListener("gattserverdisconnected", ()=>{
-      btPrinterChar = null;
-      updatePrinterStatus();
-      alertToast("打印机已断开连接");
-    });
-    updatePrinterStatus();
+    await connectToBluetoothDevice(device);
     alertToast("打印机已连接: " + (device.name||"未知设备"));
   }catch(err){
     if(err && err.name==="NotFoundError") return; // user cancelled the device picker
     alertToast("连接失败: " + (err && err.message ? err.message : err));
+  }
+}
+
+// Web Bluetooth's "persistent permissions" feature (Chrome on Android; not universally
+// supported, hence the feature check) remembers devices the user already granted access to and
+// can hand them back via getDevices() with no new picker prompt — but reconnecting their GATT
+// server still needs an explicit tap in this app rather than happening silently on page load,
+// both because gatt.connect() is more reliable right after a real user gesture on some Android
+// WebViews, and so staff always get a visible confirmation of which printer just came online.
+let rememberedBtDevice = null;
+async function checkForRememberedPrinter(){
+  if(!navigator.bluetooth || !navigator.bluetooth.getDevices) return;
+  try{
+    const devices = await navigator.bluetooth.getDevices();
+    rememberedBtDevice = devices && devices.length ? devices[0] : null;
+  }catch(e){ rememberedBtDevice = null; }
+  updatePrinterStatus();
+}
+
+async function reconnectRememberedPrinter(){
+  if(!rememberedBtDevice) return;
+  try{
+    await connectToBluetoothDevice(rememberedBtDevice);
+    alertToast("打印机已重新连接: " + (rememberedBtDevice.name||"未知设备"));
+  }catch(err){
+    alertToast("重新连接失败: " + (err && err.message ? err.message : err));
   }
 }
 
@@ -2639,6 +2678,7 @@ function init(){
   tickClock();
   setInterval(tickClock, 15000);
   initCloudSyncOnLoad();
+  checkForRememberedPrinter();
 
   document.getElementById("btnClearCart").onclick = ()=>{
     if(cart.length===0) return;
@@ -2728,6 +2768,7 @@ function init(){
     printKitchenTicketBT(currentReceiptOrder);
   };
   document.getElementById("btnConnectPrinter").onclick = connectBluetoothPrinter;
+  document.getElementById("btnReconnectPrinter").onclick = reconnectRememberedPrinter;
   document.getElementById("btnTestPrint").onclick = testPrint;
 
   document.querySelectorAll(".settings-tab").forEach(tab=>{
