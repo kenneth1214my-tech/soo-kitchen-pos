@@ -2043,17 +2043,16 @@ function canvasToEscPosRaster(canvas){
 }
 
 const ESC_INIT = new Uint8Array([0x1B,0x40]);
-// The short "GS V 0" full-cut form (0x1D,0x56,0x00) has no feed-amount parameter — how much
-// blank paper it advances before cutting is entirely up to the printer's own firmware default,
-// which is why trimming our own line feeds before it (a prior fix, still kept below) made no
-// visible difference: those bytes aren't what the printer was using to decide the gap size.
-// "GS V 66 n" (0x1D,0x56,0x42,n) is the newer form that lets us say explicitly: n=0 means feed
-// only to the minimum cutting position, nothing extra, then partial-cut. This is a real ESC/POS
-// spec command, but cheap generic thermal printer clones (like this shop's MPT-II-30B7) often
-// only implement the older 3-byte forms — if this printer doesn't recognize it, the cut simply
-// won't happen (paper needs to be torn by hand) rather than anything damaging. If that happens,
-// revert this line back to `new Uint8Array([0x0A,0x0A,0x1D,0x56,0x00])`.
-const ESC_FEED_CUT = new Uint8Array([0x0A,0x0A,0x1D,0x56,0x42,0x00]);
+// Tried the newer "GS V 66 0" explicit-zero-feed cut form to shrink a large blank gap at the
+// bottom of every print on this shop's printer (MPT-II-30B7, a cheap generic clone) — confirmed
+// via a short test-print (barely any content, same size gap) that the gap is a fixed amount the
+// printer's own firmware feeds before cutting, unrelated to receipt content or our own line-feed
+// count. The explicit-feed command made no difference, meaning this clone doesn't implement it
+// and just falls back to its normal fixed cut behavior — so reverted to the plain, universally-
+// supported "GS V 0" form rather than keeping an experimental byte that does nothing here. This
+// blank gap appears to be a fixed hardware/firmware characteristic of this printer model, not
+// something fixable from software.
+const ESC_FEED_CUT = new Uint8Array([0x0A,0x0A,0x1D,0x56,0x00]);
 
 async function printBlocks(blocks){
   if(!btPrinterChar){
