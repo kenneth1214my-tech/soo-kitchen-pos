@@ -13,6 +13,7 @@ const DEFAULT_STATE = {
     taxEnabled:false,
     taxRate:6,
     qrImage:"",
+    onlineOrderQrImage:"",
     pin:"0000",
     discountPinRequired:false,
     deviceLabel:"",
@@ -776,6 +777,12 @@ function showReceipt(order, returnToSplitList){
       <div class="r-line"><span>找零</span><span>${fmt(order.change)}</span></div>
     `:""}
     ${receiptFooterText ? `<div class="r-footer">${escapeHtml(receiptFooterText)}</div>` : ""}
+    ${state.settings.onlineOrderQrImage ? `
+      <div class="r-online-qr">
+        <img src="${state.settings.onlineOrderQrImage}" alt="线上预订">
+        <div>扫描预订 SCAN FOR ONLINE ORDER</div>
+      </div>
+    ` : ""}
   `;
   document.getElementById("btnNewOrder").dataset.returnSplit = returnToSplitList ? "1" : "";
   currentReceiptOrder = order;
@@ -1227,6 +1234,13 @@ function populateSettingsForm(){
   }else{
     preview.classList.add("hidden");
   }
+  const onlineOrderPreview = document.getElementById("onlineOrderQrPreview");
+  if(state.settings.onlineOrderQrImage){
+    onlineOrderPreview.src = state.settings.onlineOrderQrImage;
+    onlineOrderPreview.classList.remove("hidden");
+  }else{
+    onlineOrderPreview.classList.add("hidden");
+  }
   renderMenuEditor();
   renderComboListEditor();
   renderPromoEditor();
@@ -1306,6 +1320,25 @@ function handleQrFile(e){
     alertToast("二维码已更新");
   };
   reader.readAsDataURL(file);
+}
+
+// Unlike handleQrFile above (raw, uncompressed — that QR is only ever shown on-screen during
+// checkout, never synced), this one goes through resizeImageFile: it also gets printed on every
+// receipt AND synced to Firestore alongside the rest of settings, so an uncompressed multi-MB
+// phone photo here would both bloat every print job and risk pushing the synced document over
+// Firestore's 1MiB limit (a real risk already flagged for the similarly-unbounded qrImage field).
+// 500px/0.9 quality keeps the QR's modules crisp enough to stay scannable after compression.
+function handleOnlineOrderQrFile(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  resizeImageFile(file, 500, 0.9, dataUrl=>{
+    state.settings.onlineOrderQrImage = dataUrl;
+    saveState();
+    const preview = document.getElementById("onlineOrderQrPreview");
+    preview.src = dataUrl;
+    preview.classList.remove("hidden");
+    alertToast("线上预订二维码已更新");
+  });
 }
 
 // ---------- Backup / restore ----------
@@ -1837,17 +1870,42 @@ function paperWidthPx(){
   return state.settings.paperWidth==="80" ? 576 : 384;
 }
 
-// Renders lines of text to a canvas, then converts to an ESC/POS raster bit-image and sends it.
-// Rendering as an image (rather than sending encoded text) avoids codepage/Chinese-character
-// compatibility issues that vary across cheap thermal-printer clones.
-function renderTicketCanvas(blocks){
+// Loads a data-URL image and resolves once it's decoded, so its natural width/height are known
+// before layout is computed — needed because renderTicketCanvas's block layout (below) has to
+// know every block's height up front to size the canvas in a single pass.
+function loadImageEl(dataUrl){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload = ()=>resolve(img);
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+// Renders lines of text (and, for a `{image:dataUrl}` block, a picture — currently only used for
+// the online-order QR on the customer receipt) to a canvas, then converts to an ESC/POS raster
+// bit-image and sends it. Rendering as an image (rather than sending encoded text) avoids
+// codepage/Chinese-character compatibility issues that vary across cheap thermal-printer clones.
+async function renderTicketCanvas(blocks){
   const width = paperWidthPx();
-  const lineHeight = 30;
   const measureCanvas = document.createElement("canvas");
   const mctx = measureCanvas.getContext("2d");
   let totalHeight = 20;
   const wrapped = [];
-  blocks.forEach(b=>{
+  for(const b of blocks){
+    if(b.image){
+      const img = await loadImageEl(b.image);
+      const maxW = width - 24;
+      // Cap the printed QR at a fixed target width (falls back to the image's own width if
+      // smaller) rather than printing it at full paper width — a QR that large would be
+      // pointlessly oversized and waste paper on an 80mm roll.
+      const targetW = Math.min(b.width || 180, maxW, img.naturalWidth || img.width);
+      const targetH = Math.round((img.naturalHeight || img.height) * (targetW / (img.naturalWidth || img.width)));
+      wrapped.push({ type:"image", img, w: targetW, h: targetH, align: b.align||"center" });
+      totalHeight += targetH;
+      if(b.spacingAfter) totalHeight += b.spacingAfter;
+      continue;
+    }
     const size = b.size==="lg" ? 26 : b.size==="sm" ? 16 : 20;
     const weight = b.bold ? "700" : "400";
     mctx.font = `${weight} ${size}px "Microsoft YaHei","PingFang SC",sans-serif`;
@@ -1870,11 +1928,11 @@ function renderTicketCanvas(blocks){
     });
     linesForBlock.push(line);
     linesForBlock.forEach(l=>{
-      wrapped.push({ text:l, size, weight, align: b.align||"left" });
+      wrapped.push({ type:"text", text:l, size, weight, align: b.align||"left" });
       totalHeight += size + 10;
     });
     if(b.spacingAfter) totalHeight += b.spacingAfter;
-  });
+  }
   totalHeight += 30;
 
   const canvas = document.createElement("canvas");
@@ -1887,9 +1945,16 @@ function renderTicketCanvas(blocks){
   ctx.textBaseline = "top";
 
   let y = 16;
-  let bi = 0, consumed = 0;
   for(let i=0;i<wrapped.length;i++){
     const w = wrapped[i];
+    if(w.type==="image"){
+      let ix = 12;
+      if(w.align==="center") ix = Math.max(12, (width-w.w)/2);
+      else if(w.align==="right") ix = Math.max(12, width-w.w-12);
+      ctx.drawImage(w.img, ix, y, w.w, w.h);
+      y += w.h;
+      continue;
+    }
     ctx.font = `${w.weight} ${w.size}px "Microsoft YaHei","PingFang SC",sans-serif`;
     const tw = ctx.measureText(w.text).width;
     let x = 12;
@@ -1937,7 +2002,7 @@ async function printBlocks(blocks){
     return false;
   }
   try{
-    const canvas = renderTicketCanvas(blocks);
+    const canvas = await renderTicketCanvas(blocks);
     const raster = canvasToEscPosRaster(canvas);
     const payload = new Uint8Array(ESC_INIT.length + raster.length + ESC_FEED_CUT.length);
     payload.set(ESC_INIT,0);
@@ -1987,6 +2052,10 @@ function receiptToPrintBlocks(order){
     blocks.push({ text: `实收 ${fmt(order.cashReceived)}  找零 ${fmt(order.change)}` });
   }
   if(receiptFooterText) blocks.push({ text: receiptFooterText, align:"center", spacingAfter:6 });
+  if(state.settings.onlineOrderQrImage){
+    blocks.push({ image: state.settings.onlineOrderQrImage, width:180, align:"center", spacingAfter:4 });
+    blocks.push({ text: "扫描预订 SCAN FOR ONLINE ORDER", size:"sm", bold:true, align:"center", spacingAfter:6 });
+  }
   return blocks;
 }
 
@@ -2673,6 +2742,7 @@ function init(){
   });
   document.getElementById("btnSaveGeneral").onclick = saveGeneralSettings;
   document.getElementById("inputQrFile").addEventListener("change", handleQrFile);
+  document.getElementById("inputOnlineOrderQrFile").addEventListener("change", handleOnlineOrderQrFile);
   document.getElementById("btnAddCategory").onclick = addCategory;
   document.getElementById("btnAddPromo").onclick = addPromo;
   document.getElementById("btnGenShopId").onclick = ()=>{ document.getElementById("cloudShopIdInput").value = genShopId(); };

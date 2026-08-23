@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202608212100">
+<link rel="manifest" href="manifest.json?v=202608212200">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202608212100">
-<link rel="icon" href="icon-192.png?v=202608212100">
-<link rel="stylesheet" href="style.css?v=202608212100">
+<link rel="apple-touch-icon" href="icon-192.png?v=202608212200">
+<link rel="icon" href="icon-192.png?v=202608212200">
+<link rel="stylesheet" href="style.css?v=202608212200">
 </head>
 <body>
 
@@ -283,6 +283,10 @@
         <input type="file" id="inputQrFile" accept="image/*">
         <img id="qrPreview" class="qr-preview hidden">
 
+        <label>线上预订二维码 (会印在收据底部,留空则不印)</label>
+        <input type="file" id="inputOnlineOrderQrFile" accept="image/*">
+        <img id="onlineOrderQrPreview" class="qr-preview hidden">
+
         <label class="checkbox-row"><input type="checkbox" id="inputDiscountPinRequired"> 熟客折扣需要管理密码确认</label>
 
         <label>设备标识 (多台设备同时用时,各填不同代号避免单号重复,例如 A / 收银台1)</label>
@@ -387,6 +391,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202608212100" defer></script>
+<script src="app.js?v=202608212200" defer></script>
 </body>
 </html>
