@@ -2224,7 +2224,7 @@ function showSettlement(){
   const el = document.getElementById("settlementContent");
   el.innerHTML = `
     <div class="r-shop">${escapeHtml(state.settings.shopName)}</div>
-    <div class="r-meta">今日结算单 · ${t}</div>
+    <div class="r-meta" style="font-size:16px;font-weight:700;color:var(--text);">今日结算单 · ${t}</div>
     <hr>
     <div class="r-line"><span>有效订单数</span><span>${s.orderCount}</span></div>
     ${s.voidedCount>0 ? `<div class="r-line"><span>已作废订单</span><span>${s.voidedCount}</span></div>` : ""}
