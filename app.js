@@ -823,8 +823,24 @@ function requestPinConfirm(title, callback){
 // the rest of the session.
 let historyStatsUnlocked = false;
 
+// Shared by the on-screen stats box and the printable daily settlement, so the two never drift
+// apart (e.g. one counting a discount/tax field the other forgets).
+function computeDailySummary(todays){
+  const valid = todays.filter(o=>!o.voided);
+  return {
+    orderCount: valid.length,
+    voidedCount: todays.length - valid.length,
+    totalSales: round2(valid.reduce((s,o)=>s+o.total,0)),
+    cashSales: round2(valid.filter(o=>o.paymentMethod==="cash").reduce((s,o)=>s+o.total,0)),
+    qrSales: round2(valid.filter(o=>o.paymentMethod==="qr").reduce((s,o)=>s+o.total,0)),
+    totalDiscount: round2(valid.reduce((s,o)=>s+(o.discount||0),0)),
+    totalTax: round2(valid.reduce((s,o)=>s+(o.tax||0),0))
+  };
+}
+
 function renderHistoryStats(todays){
   const box = document.getElementById("historySummary");
+  const settlementBtn = document.getElementById("btnPrintSettlement");
   if(!historyStatsUnlocked){
     box.innerHTML = `<button id="btnUnlockStats" class="secondary-btn" style="flex:1;">🔒 需要密码查看营业额统计</button>`;
     document.getElementById("btnUnlockStats").onclick = ()=>{
@@ -833,18 +849,20 @@ function renderHistoryStats(todays){
         renderHistoryStats(todays);
       });
     };
+    settlementBtn.classList.add("hidden");
     return;
   }
-  const valid = todays.filter(o=>!o.voided);
-  const totalSales = valid.reduce((s,o)=>s+o.total,0);
-  const cashSales = valid.filter(o=>o.paymentMethod==="cash").reduce((s,o)=>s+o.total,0);
-  const qrSales = valid.filter(o=>o.paymentMethod==="qr").reduce((s,o)=>s+o.total,0);
+  const s = computeDailySummary(todays);
   box.innerHTML = `
-    <div class="stat">订单数<b>${valid.length}</b></div>
-    <div class="stat">总营业额<b>${fmt(totalSales)}</b></div>
-    <div class="stat">现金<b>${fmt(cashSales)}</b></div>
-    <div class="stat">电子钱包<b>${fmt(qrSales)}</b></div>
+    <div class="stat">订单数<b>${s.orderCount}</b></div>
+    <div class="stat">总营业额<b>${fmt(s.totalSales)}</b></div>
+    <div class="stat">现金<b>${fmt(s.cashSales)}</b></div>
+    <div class="stat">电子钱包<b>${fmt(s.qrSales)}</b></div>
   `;
+  // Only reachable once the same PIN gate above unlocked revenue stats — the settlement is
+  // basically those same numbers made printable, so it inherits the same visibility rule rather
+  // than needing a separate PIN check of its own.
+  settlementBtn.classList.remove("hidden");
 }
 
 function openHistory(){
@@ -2191,6 +2209,57 @@ function receiptToPrintBlocks(order){
   return blocks;
 }
 
+// ---------- Daily settlement (打烊结算单) ----------
+// An optional end-of-day summary a shop owner can print when closing — total sales, split by
+// payment method, discounts/tax given, and a "应有现金" line for counting the cash drawer against.
+// Only reachable from inside the already PIN-gated revenue-stats view in 今日订单记录 (see
+// renderHistoryStats), so it inherits that same access control rather than needing its own.
+let currentSettlementSummary = null;
+
+function showSettlement(){
+  const t = todayStr();
+  const todays = history.filter(o=>o.date===t);
+  const s = computeDailySummary(todays);
+  currentSettlementSummary = s;
+  const el = document.getElementById("settlementContent");
+  el.innerHTML = `
+    <div class="r-shop">${escapeHtml(state.settings.shopName)}</div>
+    <div class="r-meta">今日结算单 · ${t}</div>
+    <hr>
+    <div class="r-line"><span>有效订单数</span><span>${s.orderCount}</span></div>
+    ${s.voidedCount>0 ? `<div class="r-line"><span>已作废订单</span><span>${s.voidedCount}</span></div>` : ""}
+    <hr>
+    <div class="r-line"><span>现金</span><span>${fmt(s.cashSales)}</span></div>
+    <div class="r-line"><span>DuitNow / 电子钱包</span><span>${fmt(s.qrSales)}</span></div>
+    ${s.totalDiscount>0 ? `<div class="r-line"><span>折扣总额</span><span>-${fmt(s.totalDiscount)}</span></div>` : ""}
+    ${s.totalTax>0 ? `<div class="r-line"><span>服务税总额</span><span>${fmt(s.totalTax)}</span></div>` : ""}
+    <div class="r-line r-total"><span>总营业额</span><span>${fmt(s.totalSales)}</span></div>
+    <hr>
+    <div class="r-line"><span>应有现金 (抽屉清点用)</span><span>${fmt(s.cashSales)}</span></div>
+    <div class="r-meta" style="margin-top:10px;">打印时间: ${new Date().toLocaleString("en-MY")}</div>
+  `;
+  showModal("settlementModal");
+}
+
+function settlementToPrintBlocks(s, dateStr){
+  const blocks = [];
+  blocks.push({ text: state.settings.shopName, size:"lg", bold:true, align:"center" });
+  blocks.push({ text: "今日结算单", bold:true, align:"center" });
+  blocks.push({ text: dateStr, size:"sm", align:"center", spacingAfter:10 });
+  blocks.push({ text: `有效订单数  ${s.orderCount}`, align:"right" });
+  if(s.voidedCount>0) blocks.push({ text: `已作废订单  ${s.voidedCount}`, align:"right" });
+  blocks.push({ text: "--------------------------------", spacingAfter:4 });
+  blocks.push({ text: `现金  ${fmt(s.cashSales)}`, align:"right" });
+  blocks.push({ text: `DuitNow/电子钱包  ${fmt(s.qrSales)}`, align:"right" });
+  if(s.totalDiscount>0) blocks.push({ text: `折扣总额  -${fmt(s.totalDiscount)}`, align:"right" });
+  if(s.totalTax>0) blocks.push({ text: `服务税总额  ${fmt(s.totalTax)}`, align:"right" });
+  blocks.push({ text: `总营业额  ${fmt(s.totalSales)}`, bold:true, size:"lg", align:"right", spacingAfter:10 });
+  blocks.push({ text: "--------------------------------", spacingAfter:4 });
+  blocks.push({ text: `应有现金 (抽屉清点用)  ${fmt(s.cashSales)}`, align:"right", spacingAfter:6 });
+  blocks.push({ text: `打印时间: ${new Date().toLocaleString("en-MY")}`, size:"sm", align:"center" });
+  return blocks;
+}
+
 function kitchenTicketToPrintBlocks(order){
   const blocks = [];
   blocks.push({ text: `订单 ${order.orderNo}`, size:"lg", bold:true, align:"center" });
@@ -2210,6 +2279,7 @@ function kitchenTicketToPrintBlocks(order){
 
 function printReceiptBT(order){ return printBlocks(receiptToPrintBlocks(order)); }
 function printKitchenTicketBT(order){ return printBlocks(kitchenTicketToPrintBlocks(order)); }
+function printSettlementBT(summary, dateStr){ return printBlocks(settlementToPrintBlocks(summary, dateStr)); }
 
 function resizeImageFile(file, maxSize, quality, callback){
   // Neither failure path used to be handled at all: picking a non-image or corrupted file left
@@ -2876,6 +2946,12 @@ function init(){
   document.getElementById("btnPrintKitchen").onclick = ()=>{
     if(!currentReceiptOrder) return;
     printKitchenTicketBT(currentReceiptOrder);
+  };
+  document.getElementById("btnPrintSettlement").onclick = showSettlement;
+  document.getElementById("btnPrintSettlementDoc").onclick = ()=>{
+    if(!currentSettlementSummary) return;
+    if(btPrinterChar){ printSettlementBT(currentSettlementSummary, todayStr()); }
+    else{ window.print(); }
   };
   document.getElementById("btnConnectPrinter").onclick = connectBluetoothPrinter;
   document.getElementById("btnReconnectPrinter").onclick = reconnectRememberedPrinter;

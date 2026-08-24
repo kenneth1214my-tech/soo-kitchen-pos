@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202608231230">
+<link rel="manifest" href="manifest.json?v=202608240900">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202608231230">
-<link rel="icon" href="icon-192.png?v=202608231230">
-<link rel="stylesheet" href="style.css?v=202608231230">
+<link rel="apple-touch-icon" href="icon-192.png?v=202608240900">
+<link rel="icon" href="icon-192.png?v=202608240900">
+<link rel="stylesheet" href="style.css?v=202608240900">
 </head>
 <body>
 
@@ -222,6 +222,17 @@
   </div>
 </div>
 
+<!-- Daily Settlement Modal -->
+<div id="settlementModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span>今日结算单</span><button class="close-btn" data-close="settlementModal">✕</button></div>
+    <div id="settlementContent" class="receipt"></div>
+    <div class="receipt-actions">
+      <button id="btnPrintSettlementDoc" class="primary-btn">🖨 打印结算单</button>
+    </div>
+  </div>
+</div>
+
 <!-- Recently Deleted / Trash Modal -->
 <div id="trashModal" class="modal hidden">
   <div class="modal-box wide">
@@ -236,6 +247,7 @@
   <div class="modal-box wide">
     <div class="modal-header"><span>今日订单记录</span><button class="close-btn" data-close="historyModal">✕</button></div>
     <div id="historySummary" class="history-summary"></div>
+    <button id="btnPrintSettlement" class="secondary-btn hidden" style="margin:0 18px 12px;width:calc(100% - 36px);">🖨 打印今日结算单</button>
     <div id="historyList" class="history-list"></div>
   </div>
 </div>
@@ -396,6 +408,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202608231230" defer></script>
+<script src="app.js?v=202608240900" defer></script>
 </body>
 </html>
