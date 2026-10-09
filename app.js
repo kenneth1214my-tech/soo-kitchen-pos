@@ -1588,6 +1588,8 @@ function connectCloudSync(configObj, shopId, isReconnect){
     cloudLastError = null;
     const cfg = loadCloudConfig();
     if(cfg){ cfg.lastSyncedAt = new Date().toISOString(); saveCloudConfig(cfg); }
+    // Only once the server (not just the local cache) has answered — that's proof we're really online.
+    if(!snap.metadata.fromCache) retryUnsyncedOrders();
 
     if(snap.metadata.hasPendingWrites){
       // Our own optimistic write echoing back before Firestore has confirmed it server-side —
@@ -1718,15 +1720,51 @@ function pushCloudState(){
 // the order stays exactly as safe in local history either way, it just won't show on the
 // dashboard until a later successful push (there is no retry queue for this in v1 — acceptable
 // for a low-stakes "nice to check from home" view, unlike the menu/settings sync).
+// Doc IDs of orders whose cloud push hasn't been confirmed yet. Firestore queues an offline write
+// only in memory, so closing the app before reconnecting would lose it for good — this list is what
+// lets retryUnsyncedOrders() re-send them on the next successful connection.
+const UNSYNCED_KEY = "sk_pos_unsynced_orders_v1";
+// docId -> sequence number of the latest push attempt, so an older write's ack can't mark an order
+// synced while a newer edit to it (e.g. a void) is still waiting to be sent.
+const ordersInFlight = new Map();
+let orderPushSeq = 0;
+function loadUnsyncedOrderIds(){
+  try{ return JSON.parse(localStorage.getItem(UNSYNCED_KEY)) || []; }
+  catch(e){ return []; }
+}
+function saveUnsyncedOrderIds(ids){
+  try{ localStorage.setItem(UNSYNCED_KEY, JSON.stringify(ids)); }catch(e){}
+}
+function markOrderUnsynced(docId){
+  const ids = loadUnsyncedOrderIds();
+  if(!ids.includes(docId)){ ids.push(docId); saveUnsyncedOrderIds(ids); }
+}
+function markOrderSynced(docId){
+  saveUnsyncedOrderIds(loadUnsyncedOrderIds().filter(id=>id!==docId));
+}
+function retryUnsyncedOrders(){
+  const ids = loadUnsyncedOrderIds();
+  if(ids.length===0) return;
+  ids.forEach(docId=>{
+    const order = history.find(o=>`${o.date}_${o.orderNo}` === docId);
+    if(!order){ markOrderSynced(docId); return; } // order no longer exists locally — nothing to send
+    if(ordersInFlight.has(docId)) return; // a push is already queued with the SDK
+    pushOrderToCloud(order);
+  });
+}
+
 function pushOrderToCloud(order){
   const cfg = loadCloudConfig();
-  if(!cfg || !cfg.enabled || !cloudDb) return;
+  if(!cfg || !cfg.enabled) return;
   // order.orderNo alone is NOT a safe Firestore doc ID: it's built from state.nextOrderSeq, which
   // ensureOrderSeq() resets to 1 every day — so "#001" on Monday and "#001" on Tuesday are the
   // same string. Using orderNo bare would make Tuesday's first sale silently overwrite Monday's
   // via this same .set({merge:true}) call, corrupting past days' records with zero indication.
   // Prefixing with the date makes the doc ID unique across all time.
   const docId = `${order.date}_${order.orderNo}`;
+  // Recorded BEFORE the cloudDb check so an order sold while not yet connected is still retried.
+  markOrderUnsynced(docId);
+  if(!cloudDb) return;
   try{
     // deepClone() round-trips through JSON, which drops any explicit `undefined` field (e.g.
     // cashReceived/change are literally `undefined` on QR orders, not omitted — see finalizeOrder).
@@ -1734,10 +1772,17 @@ function pushOrderToCloud(order){
     // is called directly from finalizeOrder()/voidOrder() — would otherwise abort checkout/void
     // entirely just because this optional, best-effort cloud push failed. Wrapping in try/catch
     // too so this feature can never break the core flow no matter what causes a future failure.
+    const mySeq = ++orderPushSeq;
+    ordersInFlight.set(docId, mySeq);
     cloudDb.collection("posShops").doc(cfg.shopId).collection("orders").doc(docId)
       .set(deepClone(order), {merge:true})
-      .catch(()=>{ /* best-effort, see comment above */ });
-  }catch(e){ /* best-effort, see comment above */ }
+      .then(()=>{
+        if(ordersInFlight.get(docId)===mySeq){ ordersInFlight.delete(docId); markOrderSynced(docId); }
+      })
+      .catch(()=>{
+        if(ordersInFlight.get(docId)===mySeq) ordersInFlight.delete(docId); // stays unsynced; retried on next connect
+      });
+  }catch(e){ ordersInFlight.delete(docId); /* same: retried later */ }
 }
 
 function initCloudSyncOnLoad(){
