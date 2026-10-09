@@ -63,6 +63,14 @@ function saveState(){
   if(!applyingRemoteCloudState) scheduleCloudPush();
 }
 
+// For per-device bookkeeping that is NOT part of the cloud-synced snapshot (order counter, last
+// order date). saveState() would also bump lastModified and schedule a cloud push of this device's
+// whole menu/settings — so a tablet that just woke up with a stale menu would overwrite newer edits
+// made on another device, and skip applying them itself while its push was pending.
+function saveStateLocalOnly(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
 function loadHistory(){
   try{ return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; }
   catch(e){ return []; }
@@ -93,7 +101,7 @@ function ensureOrderSeq(){
   if(state.lastOrderDate !== t){
     state.lastOrderDate = t;
     state.nextOrderSeq = 1;
-    saveState();
+    saveStateLocalOnly();
   }
 }
 function peekOrderNo(){
@@ -735,12 +743,12 @@ function finalizeOrderInner(paymentMethod, extra){
     showReceipt(order, !allPaid);
     if(allPaid){
       state.nextOrderSeq++;
-      saveState();
+      saveStateLocalOnly();
       clearCart();
     }
   }else{
     state.nextOrderSeq++;
-    saveState();
+    saveStateLocalOnly();
     showReceipt(order, false);
     maybeAutoPrintKitchen(order.orderNo, order.items);
     clearCart();
