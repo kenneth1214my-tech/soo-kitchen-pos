@@ -184,16 +184,38 @@ function refresh(){
     });
 }
 
+// One copy-pasteable string carrying both the Firebase config and the shop ID, so moving the
+// dashboard to another device is one paste instead of a long JSON plus a separate ID. It is exactly
+// as sensitive as those two values together (anyone holding it can read the shop's data), so it is
+// only ever put on the clipboard by an explicit button press, never shown or stored elsewhere.
+const CODE_PREFIX = "SKD1.";
+function encodeConnectCode(configText, shopId){
+  const json = JSON.stringify({ c: configText, s: shopId });
+  return CODE_PREFIX + btoa(unescape(encodeURIComponent(json)));
+}
+function decodeConnectCode(code){
+  try{
+    const trimmed = code.trim();
+    if(!trimmed.startsWith(CODE_PREFIX)) return null;
+    const obj = JSON.parse(decodeURIComponent(escape(atob(trimmed.slice(CODE_PREFIX.length)))));
+    if(!obj || !obj.c || !obj.s) return null;
+    JSON.parse(obj.c); // must itself be valid config JSON
+    return { configText: obj.c, shopId: obj.s };
+  }catch(e){ return null; }
+}
+
 function showDashboard(){
   document.getElementById("connectView").classList.add("hidden");
   document.getElementById("dashboardView").classList.remove("hidden");
   document.getElementById("btnDisconnect").classList.remove("hidden");
+  document.getElementById("btnCopyCode").classList.remove("hidden");
 }
 
 function showConnectForm(){
   document.getElementById("connectView").classList.remove("hidden");
   document.getElementById("dashboardView").classList.add("hidden");
   document.getElementById("btnDisconnect").classList.add("hidden");
+  document.getElementById("btnCopyCode").classList.add("hidden");
 }
 
 function tryConnect(configObj, shopId){
@@ -239,6 +261,32 @@ function init(){
     catch(e){ document.getElementById("connectStatus").textContent = "Firebase 配置格式不对,请确认整段 JSON 都贴上了"; return; }
     saveCloudConfig({ enabled:true, configText, shopId });
     tryConnect(configObj, shopId);
+  };
+
+  document.getElementById("btnConnectCode").onclick = ()=>{
+    const decoded = decodeConnectCode(document.getElementById("connectCodeInput").value);
+    if(!decoded){
+      document.getElementById("connectStatus").textContent = "连接码不对,请确认整段都复制了 (以 SKD1. 开头)";
+      return;
+    }
+    document.getElementById("cloudConfigInput").value = decoded.configText;
+    document.getElementById("cloudShopIdInput").value = decoded.shopId;
+    saveCloudConfig({ enabled:true, configText: decoded.configText, shopId: decoded.shopId });
+    document.getElementById("connectCodeInput").value = "";
+    tryConnect(JSON.parse(decoded.configText), decoded.shopId);
+  };
+
+  document.getElementById("btnCopyCode").onclick = ()=>{
+    const saved = loadCloudConfig();
+    if(!saved) return;
+    const code = encodeConnectCode(saved.configText, saved.shopId);
+    const btn = document.getElementById("btnCopyCode");
+    const done = ()=>{ btn.textContent = "✅ 已复制"; setTimeout(()=>{ btn.textContent = "📋 复制连接码"; }, 2000); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(code).then(done).catch(()=>{ prompt("请手动复制这段连接码:", code); });
+    }else{
+      prompt("请手动复制这段连接码:", code);
+    }
   };
 
   document.getElementById("btnDisconnect").onclick = ()=>{

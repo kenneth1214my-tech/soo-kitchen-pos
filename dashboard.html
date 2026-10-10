@@ -4,18 +4,23 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Soo's Kitchen 营业额</title>
-<link rel="stylesheet" href="dashboard.css?v=202608160004">
+<link rel="stylesheet" href="dashboard.css?v=202610101000">
 </head>
 <body>
 
 <header id="topbar">
   <div class="title">Soo's Kitchen 营业额</div>
+  <button id="btnCopyCode" class="link-btn hidden">📋 复制连接码</button>
   <button id="btnDisconnect" class="link-btn hidden">断开</button>
 </header>
 
 <main id="connectView">
   <div class="card">
     <p class="hint">这是给店主自己远端查看营业额用的页面,员工不会看到。贴上跟 POS 里一样的 Firebase 配置和店铺代号即可查看。</p>
+    <label>方法一:连接码 (从已连接的设备上点「📋 复制连接码」)</label>
+    <input type="text" id="connectCodeInput" placeholder="贴上连接码 SKD1.xxxx">
+    <button id="btnConnectCode" class="primary-btn">用连接码连接</button>
+    <label style="margin-top:16px;">方法二:手动贴上配置和店铺代号</label>
     <label>Firebase 项目配置</label>
     <textarea id="cloudConfigInput" rows="5" placeholder='{"apiKey":"...", "authDomain":"...", "projectId":"...", ...}'></textarea>
     <label>店铺代号</label>
@@ -66,6 +71,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="dashboard.js?v=202608160004" defer></script>
+<script src="dashboard.js?v=202610101000" defer></script>
 </body>
 </html>
