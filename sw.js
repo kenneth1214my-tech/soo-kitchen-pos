@@ -52,7 +52,10 @@ async function cacheLookup(request){
 }
 
 async function networkFirst(request){
-  const cached = await cacheLookup(request);
+  // The cache is a bonus, never a dependency: if it can't even be opened (storage full, restricted
+  // WebView, private mode) we must behave exactly like a plain pass-through instead of failing the load.
+  let cached = null;
+  try{ cached = await cacheLookup(request); }catch(e){ cached = null; }
   const sameOrigin = new URL(request.url).origin === self.location.origin;
   // no-cache = always revalidate with the server instead of trusting the HTTP cache's max-age.
   const fresh = fetch(request, sameOrigin ? { cache:"no-cache" } : undefined).then(res=>{
@@ -107,5 +110,5 @@ self.addEventListener("activate", (event)=>{
 
 self.addEventListener("fetch", (event)=>{
   if(!isHandled(event.request)) return;
-  event.respondWith(networkFirst(event.request));
+  event.respondWith(networkFirst(event.request).catch(()=> fetch(event.request)));
 });
