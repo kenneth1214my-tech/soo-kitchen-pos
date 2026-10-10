@@ -4,7 +4,35 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Soo's Kitchen 营业额</title>
-<link rel="stylesheet" href="dashboard.css?v=202610101000">
+<script>
+// Visible error reporting: on a device with no dev tools (a tablet), a failure otherwise just looks
+// like "the page is blank/stuck". Any script error or failed script download is printed in a red
+// bar at the top of the page so it can be read off the screen.
+(function(){
+  function show(msg){
+    var bar = document.getElementById("sk-error-bar");
+    if(!bar){
+      bar = document.createElement("div");
+      bar.id = "sk-error-bar";
+      bar.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b00020;color:#fff;font:13px/1.4 sans-serif;padding:10px 14px;white-space:pre-wrap;word-break:break-all;max-height:40vh;overflow:auto;";
+      (document.body || document.documentElement).appendChild(bar);
+    }
+    bar.textContent += (bar.textContent ? " | " : "") + msg;
+  }
+  window.addEventListener("error", function(e){
+    var t = e.target;
+    if(t && t !== window && (t.tagName === "SCRIPT" || t.tagName === "LINK")){
+      show("加载失败: " + (t.src || t.href));
+    }else{
+      show("错误: " + (e.message || "未知") + (e.lineno ? " (行 " + e.lineno + ")" : ""));
+    }
+  }, true);
+  window.addEventListener("unhandledrejection", function(e){
+    show("错误: " + (e.reason && e.reason.message ? e.reason.message : e.reason));
+  });
+})();
+</script>
+<link rel="stylesheet" href="dashboard.css?v=202610101230">
 </head>
 <body>
 
@@ -71,6 +99,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="dashboard.js?v=202610101000" defer></script>
+<script src="dashboard.js?v=202610101230" defer></script>
 </body>
 </html>

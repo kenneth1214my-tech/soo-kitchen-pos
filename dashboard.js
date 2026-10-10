@@ -177,7 +177,10 @@ function refresh(){
   if(!cfg || !cfg.enabled || !cloudDb) return;
   const { start, end } = currentRangeDates();
   document.getElementById("lastRefreshed").textContent = "读取中...";
-  fetchOrders(cfg.shopId, start, end)
+  // Without a timeout, a connection that never answers leaves "读取中..." on screen forever, which
+  // reads as the page being frozen. Surface it as an error instead so it can be retried/diagnosed.
+  const timeout = new Promise((_, reject)=> setTimeout(()=> reject(new Error("读取超时,请检查网络后点刷新")), 20000));
+  Promise.race([fetchOrders(cfg.shopId, start, end), timeout])
     .then(orders=> render(orders))
     .catch(err=>{
       document.getElementById("lastRefreshed").textContent = `⚠️ 读取失败: ${err && err.message ? err.message : "未知错误"}`;
