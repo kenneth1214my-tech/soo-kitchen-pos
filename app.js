@@ -392,6 +392,7 @@ function renderCart(){
   const hasItems = cart.length>0;
   document.getElementById("btnCheckout").disabled = !hasItems;
   document.getElementById("btnUndoCart").disabled = cartUndoStack.length===0;
+  document.getElementById("btnUndoFab").classList.toggle("hidden", cartUndoStack.length===0);
   document.getElementById("btnSplitBill").disabled = !hasItems;
   document.getElementById("cartFabCount").textContent = cartCount();
   document.getElementById("cartFabTotal").textContent = fmt(cartTotal());
@@ -2955,6 +2956,7 @@ function init(){
     renderCart();
   };
   document.getElementById("btnUndoCart").onclick = undoCart;
+  document.getElementById("btnUndoFab").onclick = undoCart;
   document.getElementById("btnCheckout").onclick = ()=> openCheckout(null);
   document.getElementById("btnCartMobile").onclick = toggleMobileCart;
   document.getElementById("btnHoldOrder").onclick = holdCurrentOrder;
