@@ -255,13 +255,37 @@ function blockIfSplitInProgress(){
   return true;
 }
 function resetOrderState(){
+  cartUndoStack = [];
   discount = null;
   activeOrderNo = null;
   splitGroups = null;
 }
 
+// Undo for cart edits (wrong dish tapped, qty over-incremented, line deleted by mistake). Each entry
+// is a copy of the cart taken just BEFORE a change. Cleared by resetOrderState(), which every
+// "start a new order" path goes through (checkout, 挂单, resume, reopen), so undo can never bring
+// back items from an order that was already paid or parked.
+let cartUndoStack = [];
+const CART_UNDO_LIMIT = 30;
+function snapshotCart(withDiscount){
+  const snap = { cart: cart.map(c=>Object.assign({}, c)), withDiscount: !!withDiscount };
+  if(withDiscount) snap.discount = discount ? Object.assign({}, discount) : null;
+  cartUndoStack.push(snap);
+  if(cartUndoStack.length > CART_UNDO_LIMIT) cartUndoStack.shift();
+}
+function undoCart(){
+  if(blockIfSplitInProgress()) return;
+  const snap = cartUndoStack.pop();
+  if(!snap){ alertToast("没有可撤销的操作"); return; }
+  cart = snap.cart;
+  if(snap.withDiscount) discount = snap.discount;
+  renderCart();
+  alertToast("已撤销上一步");
+}
+
 function addToCart(item){
   if(blockIfSplitInProgress()) return;
+  snapshotCart();
   const existing = cart.find(c=>c.itemId===item.id);
   if(existing){ existing.qty++; }
   else{ cart.push({ itemId:item.id, name:item.name, price:item.price, qty:1, note:"", comboContents: resolveComboContents(item) }); }
@@ -271,12 +295,14 @@ function changeQty(itemId, delta){
   if(blockIfSplitInProgress()) return;
   const line = cart.find(c=>c.itemId===itemId);
   if(!line) return;
+  snapshotCart();
   line.qty += delta;
   if(line.qty<=0){ cart = cart.filter(c=>c.itemId!==itemId); }
   renderCart();
 }
 function removeLine(itemId){
   if(blockIfSplitInProgress()) return;
+  snapshotCart();
   cart = cart.filter(c=>c.itemId!==itemId);
   renderCart();
 }
@@ -365,6 +391,7 @@ function renderCart(){
 
   const hasItems = cart.length>0;
   document.getElementById("btnCheckout").disabled = !hasItems;
+  document.getElementById("btnUndoCart").disabled = cartUndoStack.length===0;
   document.getElementById("btnSplitBill").disabled = !hasItems;
   document.getElementById("cartFabCount").textContent = cartCount();
   document.getElementById("cartFabTotal").textContent = fmt(cartTotal());
@@ -584,7 +611,11 @@ function openItemNoteModal(itemId){
 
 function saveItemNote(){
   const line = cart.find(c=>c.itemId===noteEditItemId);
-  if(line){ line.note = document.getElementById("itemNoteInput").value.trim(); renderCart(); }
+  if(line){
+    const newNote = document.getElementById("itemNoteInput").value.trim();
+    if(newNote !== line.note){ snapshotCart(); line.note = newNote; }
+    renderCart();
+  }
   hideModal("itemNoteModal");
 }
 
@@ -2915,8 +2946,15 @@ function init(){
 
   document.getElementById("btnClearCart").onclick = ()=>{
     if(cart.length===0) return;
-    if(confirm("确定清空当前订单?")) clearCart();
+    if(!confirm("确定清空当前订单?")) return;
+    // clearCart() resets the undo history (it's also the post-checkout cleanup), so take the
+    // snapshot afterwards — that way an accidental 清空 itself can be undone, discount included.
+    const before = { cart: cart.map(c=>Object.assign({}, c)), discount: discount ? Object.assign({}, discount) : null };
+    clearCart();
+    cartUndoStack.push({ cart: before.cart, discount: before.discount, withDiscount: true });
+    renderCart();
   };
+  document.getElementById("btnUndoCart").onclick = undoCart;
   document.getElementById("btnCheckout").onclick = ()=> openCheckout(null);
   document.getElementById("btnCartMobile").onclick = toggleMobileCart;
   document.getElementById("btnHoldOrder").onclick = holdCurrentOrder;

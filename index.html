@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202610101100">
+<link rel="manifest" href="manifest.json?v=202610161030">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202610101100">
-<link rel="icon" href="icon-192.png?v=202610101100">
+<link rel="apple-touch-icon" href="icon-192.png?v=202610161030">
+<link rel="icon" href="icon-192.png?v=202610161030">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202610101100">
+<link rel="stylesheet" href="style.css?v=202610161030">
 </head>
 <body>
 
@@ -50,6 +50,7 @@
     <div class="cart-header">
       <span>当前订单 <b id="orderNoLabel"></b></span>
       <div class="cart-header-actions">
+        <button id="btnUndoCart" class="link-btn undo-btn" disabled>↩ 撤销</button>
         <button id="btnHoldOrder" class="link-btn muted-link">挂单</button>
         <button id="btnSplitBill" class="link-btn muted-link">拆分账单</button>
         <button id="btnClearCart" class="link-btn">清空</button>
@@ -420,6 +421,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202610101100" defer></script>
+<script src="app.js?v=202610161030" defer></script>
 </body>
 </html>

@@ -159,9 +159,13 @@ input{font-family:inherit;}
   padding:14px;border-bottom:1px solid var(--border);
   font-weight:700;
 }
-.cart-header-actions{display:flex;gap:10px;align-items:center;}
+.cart-header-actions{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;}
+.cart-header-actions .link-btn{white-space:nowrap;font-size:13px;padding:6px 2px;}
+.cart-header > span{white-space:nowrap;}
 .link-btn{background:none;border:none;color:var(--danger);font-weight:600;font-size:14px;}
 .link-btn.muted-link{color:var(--brand);}
+.link-btn.undo-btn{color:var(--text);font-weight:700;}
+.link-btn:disabled{opacity:.35;}
 .mini-x{background:none;border:none;color:var(--text-mute);font-size:11px;padding:0 4px;cursor:pointer;}
 .discount-row span:first-child{color:var(--success);font-weight:600;}
 .discount-row span:last-child{color:var(--success);font-weight:700;}
