@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202611131930">
+<link rel="manifest" href="manifest.json?v=202611132000">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202611131930">
-<link rel="icon" href="icon-192.png?v=202611131930">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611132000">
+<link rel="icon" href="icon-192.png?v=202611132000">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202611131930">
+<link rel="stylesheet" href="style.css?v=202611132000">
 </head>
 <body>
 
@@ -460,10 +460,11 @@
       </div>
 
       <div id="tabPromo" class="settings-panel hidden">
-        <p class="hint" style="text-align:left;">建好常用优惠,结账时一键套用,不用每次手动打百分比</p>
+        <p class="hint" style="text-align:left;">建好常用优惠,结账时一键套用,不用每次手动打百分比。「启用」关掉的优惠不会出现在结账画面,但会保留。</p>
         <div class="menu-editor-actions">
           <button id="btnAddPromo" class="secondary-btn">+ 新增优惠</button>
         </div>
+        <div class="pc-quick"><span>快速新增:</span><span id="promoQuickAdds" class="pc-chips"></span></div>
         <div id="promoEditorList"></div>
       </div>
 
@@ -492,6 +493,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202611131930" defer></script>
+<script src="app.js?v=202611132000" defer></script>
 </body>
 </html>

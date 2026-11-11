@@ -748,7 +748,7 @@ let pendingPromoName = null;
 function buildPromoPresets(){
   const wrap = document.getElementById("promoPresetWrap");
   const box = document.getElementById("promoPresets");
-  const promos = state.settings.promotions || [];
+  const promos = usablePromos();   // paused / unfinished promos are not offered at checkout
   if(promos.length===0){
     wrap.classList.add("hidden");
     return;
@@ -757,13 +757,15 @@ function buildPromoPresets(){
   box.innerHTML = "";
   promos.forEach(p=>{
     const btn = document.createElement("button");
-    btn.textContent = p.type==="percent" ? `${p.name} (${p.value}%)` : `${p.name} (-RM${p.value})`;
+    btn.textContent = promoLabel(p);
+    btn.classList.toggle("active", !!discount && discount.name===p.name);
     btn.onclick = ()=>{
       discountType = p.type;
       pendingPromoName = p.name;
       document.querySelectorAll("#discountModal .pay-tab").forEach(b=>b.classList.toggle("active", b.dataset.dtype===discountType));
       buildDiscountQuick();
       document.getElementById("discountInput").value = p.value;
+      box.querySelectorAll("button").forEach(x=>x.classList.toggle("active", x===btn));
       updateDiscountPreview();
     };
     box.appendChild(btn);
@@ -1592,45 +1594,136 @@ function populateSettingsForm(){
   if(!document.getElementById("csvStartDate").value) setCsvRange("today");
 }
 
-function renderPromoEditor(){
+// ---- Promotions (优惠管理) ----
+// A promo is {id, name, type:"percent"|"amount", value, active?}. active===false = paused: kept in
+// the list but not offered at checkout (so a seasonal deal can be switched off without deleting it).
+function promoLabel(p){ return `${p.name} (${p.type==="percent" ? p.value+"%" : "-"+fmt(p.value)})`; }
+// What the promo would do to a RM20.00 bill — shown live in the editor so a typo (10 vs 100) is obvious.
+function promoExample(p){
+  const base = 20;
+  if(!(p.value > 0)) return "还没有设定数值,结账时不会出现";
+  const off = Math.min(base, p.type==="percent" ? base*p.value/100 : p.value);
+  return `例:${fmt(base)} 的单 → ${fmt(round2(base-off))}`;
+}
+function usablePromos(){
+  return (state.settings.promotions||[]).filter(p=>p.active!==false && p.value>0 && (p.name||"").trim());
+}
+
+function renderPromoEditor(focusId){
   const list = document.getElementById("promoEditorList");
   list.innerHTML = "";
-  (state.settings.promotions||[]).forEach(promo=>{
-    const row = document.createElement("div");
-    row.className = "promo-editor-row";
-    row.innerHTML = `
-      <input type="text" value="${escapeHtml(promo.name)}" placeholder="优惠名称,例如：会员9折">
-      <select>
-        <option value="percent">%</option>
-        <option value="amount">RM</option>
-      </select>
-      <input type="number" step="0.1" min="0" value="${promo.value}">
-      <button data-act="delpromo">🗑</button>
+  const promos = state.settings.promotions || [];
+  if(promos.length===0){
+    list.innerHTML = `<div class="promo-empty">还没有优惠。点上面的「快速新增」一键建立,再按需要修改名称和数值。</div>`;
+    return;
+  }
+  promos.forEach((promo, idx)=>{
+    const card = document.createElement("div");
+    card.className = "promo-card" + (promo.active===false ? " off" : "");
+    card.innerHTML = `
+      <div class="pc-head">
+        <input type="text" class="pc-name" maxlength="30" value="${escapeHtml(promo.name)}" placeholder="优惠名称,例如:会员9折">
+        <button class="pc-icon" data-act="up" title="上移" ${idx===0?"disabled":""}>▲</button>
+        <button class="pc-icon" data-act="down" title="下移" ${idx===promos.length-1?"disabled":""}>▼</button>
+      </div>
+      <div class="pc-body">
+        <div class="pc-seg">
+          <button data-t="percent" class="${promo.type==="percent"?"active":""}">折扣 %</button>
+          <button data-t="amount" class="${promo.type==="amount"?"active":""}">减价 RM</button>
+        </div>
+        <div class="pc-value"><span class="pc-unit">${promo.type==="percent"?"%":"RM"}</span><input type="number" class="pc-val" inputmode="decimal" step="any" min="0" value="${promo.value}"></div>
+      </div>
+      <div class="pc-example"></div>
+      <div class="pc-foot">
+        <label class="pc-switch"><input type="checkbox" class="pc-active" ${promo.active===false?"":"checked"}> 启用</label>
+        <span class="pc-spacer"></span>
+        <button data-act="dup">复制</button>
+        <button data-act="del" class="pc-del">🗑 删除</button>
+      </div>
     `;
-    const nameInput = row.querySelector('input[type="text"]');
-    const typeSelect = row.querySelector("select");
-    const valueInput = row.querySelector('input[type="number"]');
-    typeSelect.value = promo.type;
-    nameInput.onchange = ()=>{ promo.name = nameInput.value.trim()||promo.name; saveState(); };
-    typeSelect.onchange = ()=>{ promo.type = typeSelect.value; saveState(); };
-    valueInput.onchange = ()=>{ promo.value = Math.max(0, parseFloat(valueInput.value)||0); valueInput.value = promo.value; saveState(); };
-    row.querySelector('[data-act="delpromo"]').onclick = ()=>{
-      if(!confirm(`确定删除优惠「${promo.name}」?`)) return;
+    const nameInput = card.querySelector(".pc-name");
+    const valInput = card.querySelector(".pc-val");
+    const unit = card.querySelector(".pc-unit");
+    const example = card.querySelector(".pc-example");
+    const refresh = ()=>{ example.textContent = promoExample(promo); example.classList.toggle("warn", !(promo.value>0)); };
+    refresh();
+
+    // Save while typing (not only on blur) so a tap straight onto another tab can't lose the edit.
+    nameInput.oninput = ()=>{ promo.name = nameInput.value; saveState(); };
+    nameInput.onblur = ()=>{
+      if(!nameInput.value.trim()){ promo.name = "新优惠"; nameInput.value = promo.name; saveState(); }
+      else if(nameInput.value !== nameInput.value.trim()){ promo.name = nameInput.value.trim(); nameInput.value = promo.name; saveState(); }
+    };
+    valInput.oninput = ()=>{
+      let v = parseFloat(valInput.value);
+      if(!isFinite(v) || v < 0) v = 0;
+      if(promo.type==="percent" && v > 100){ v = 100; valInput.value = "100"; }
+      promo.value = v; saveState(); refresh();
+    };
+    valInput.onblur = ()=>{ valInput.value = promo.value; };
+    valInput.onfocus = ()=>{ valInput.select(); };
+    card.querySelectorAll(".pc-seg button").forEach(b=>{
+      b.onclick = ()=>{
+        promo.type = b.dataset.t;
+        if(promo.type==="percent" && promo.value > 100){ promo.value = 100; valInput.value = "100"; }
+        card.querySelectorAll(".pc-seg button").forEach(x=>x.classList.toggle("active", x===b));
+        unit.textContent = promo.type==="percent" ? "%" : "RM";
+        saveState(); refresh();
+      };
+    });
+    card.querySelector(".pc-active").onchange = (e)=>{
+      promo.active = e.target.checked;
+      card.classList.toggle("off", !promo.active);
+      saveState();
+    };
+    const move = d=>{
+      const arr = state.settings.promotions, i = arr.findIndex(p=>p.id===promo.id), j = i + d;
+      if(j < 0 || j >= arr.length) return;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      saveState(); renderPromoEditor();
+    };
+    card.querySelector('[data-act="up"]').onclick = ()=> move(-1);
+    card.querySelector('[data-act="down"]').onclick = ()=> move(1);
+    card.querySelector('[data-act="dup"]').onclick = ()=>{
+      const copy = Object.assign({}, promo, { id: uid(), name: promo.name + " 2" });
+      const arr = state.settings.promotions;
+      arr.splice(arr.findIndex(p=>p.id===promo.id) + 1, 0, copy);
+      saveState(); renderPromoEditor(copy.id);
+    };
+    card.querySelector('[data-act="del"]').onclick = ()=>{
+      if(!confirm(`确定删除优惠「${promo.name}」?\n(可在「最近删除」里恢复)`)) return;
       state.settings.promotions = state.settings.promotions.filter(p=>p.id!==promo.id);
       pushToTrash("promo", promo, {});
       saveState();
       renderPromoEditor();
     };
-    list.appendChild(row);
+    card.dataset.id = promo.id;
+    list.appendChild(card);
   });
+  if(focusId){
+    const c = list.querySelector(`[data-id="${focusId}"]`);
+    if(c){
+      c.scrollIntoView({ block:"center" });
+      const n = c.querySelector(".pc-name");
+      n.focus(); n.select();
+    }
+  }
 }
 
-function addPromo(){
+// preset = {name, type, value}; no argument = blank promo (10% off) ready to rename.
+function addPromo(preset){
   if(!state.settings.promotions) state.settings.promotions = [];
-  state.settings.promotions.push({ id: uid(), name: "新优惠", type: "percent", value: 10 });
+  const p = Object.assign({ name:"新优惠", type:"percent", value:10 }, preset && preset.name ? preset : {}, { id: uid(), active:true });
+  state.settings.promotions.push(p);
   saveState();
-  renderPromoEditor();
+  renderPromoEditor(p.id);
 }
+const PROMO_QUICK_ADDS = [
+  { name:"会员9折", type:"percent", value:10 },
+  { name:"员工8折", type:"percent", value:20 },
+  { name:"减 RM5", type:"amount", value:5 },
+  { name:"减 RM10", type:"amount", value:10 }
+];
 
 function saveGeneralSettings(){
   state.settings.shopName = document.getElementById("inputShopName").value.trim() || "Soo's Kitchen";
@@ -3729,7 +3822,14 @@ function init(){
   document.getElementById("importNewCatName").addEventListener("input", renderMenuImportPreview);
   document.getElementById("btnConfirmImport").onclick = confirmMenuImport;
   document.getElementById("btnDownloadMenuTemplate").onclick = downloadMenuTemplate;
-  document.getElementById("btnAddPromo").onclick = addPromo;
+  document.getElementById("btnAddPromo").onclick = ()=> addPromo();
+  const quickBox = document.getElementById("promoQuickAdds");
+  PROMO_QUICK_ADDS.forEach(q=>{
+    const b = document.createElement("button");
+    b.className = "pc-chip"; b.textContent = "+ " + q.name;
+    b.onclick = ()=> addPromo(q);
+    quickBox.appendChild(b);
+  });
   document.getElementById("btnGenShopId").onclick = ()=>{ document.getElementById("cloudShopIdInput").value = genShopId(); };
   document.getElementById("btnCloudConnect").onclick = startCloudSync;
   document.getElementById("btnCloudDisconnect").onclick = stopCloudSync;
