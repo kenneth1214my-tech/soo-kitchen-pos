@@ -383,12 +383,17 @@ function renderCart(){
     });
   }
 
-  document.getElementById("btnTypeDineIn").classList.toggle("active", orderType==="dinein");
-  document.getElementById("btnTypeTakeaway").classList.toggle("active", orderType==="takeaway");
-  const pickBtn = document.getElementById("btnPickTable");
-  pickBtn.classList.toggle("hidden", orderType!=="dinein" || tableOptions().length===0);
-  pickBtn.classList.toggle("empty", !orderTable);
-  pickBtn.textContent = `桌号: ${orderTable || "未选"} ▾`;
+  // Two copies of the same controls (one in the cart pane, one on the menu page for the
+  // drawer-style layout) — keep both in lockstep.
+  [["btnTypeDineIn","btnTypeTakeaway","btnPickTable"], ["mainTypeDineIn","mainTypeTakeaway","mainPickTable"]].forEach(ids=>{
+    document.getElementById(ids[0]).classList.toggle("active", orderType==="dinein");
+    document.getElementById(ids[1]).classList.toggle("active", orderType==="takeaway");
+    const pickBtn = document.getElementById(ids[2]);
+    pickBtn.classList.toggle("hidden", orderType!=="dinein" || tableOptions().length===0);
+    pickBtn.classList.toggle("empty", !orderTable);
+    pickBtn.textContent = `桌号: ${orderTable || "未选"} ▾`;
+  });
+  document.getElementById("cartFabType").textContent = " · " + (orderType==="takeaway" ? "外带" : (orderTable ? "桌 " + orderTable : "堂食"));
 
   document.getElementById("subtotalVal").textContent = fmt(cartSubtotal());
 
@@ -3053,6 +3058,9 @@ function init(){
   document.getElementById("btnTypeDineIn").onclick = ()=> setOrderType("dinein");
   document.getElementById("btnTypeTakeaway").onclick = ()=> setOrderType("takeaway");
   document.getElementById("btnPickTable").onclick = openTableModal;
+  document.getElementById("mainTypeDineIn").onclick = ()=> setOrderType("dinein");
+  document.getElementById("mainTypeTakeaway").onclick = ()=> setOrderType("takeaway");
+  document.getElementById("mainPickTable").onclick = openTableModal;
   document.getElementById("btnClearTable").onclick = ()=>{ orderTable = null; hideModal("tableModal"); renderCart(); };
   document.getElementById("btnUndoFab").onclick = undoCart;
   document.getElementById("btnCheckout").onclick = ()=> openCheckout(null);

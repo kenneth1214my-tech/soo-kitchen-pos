@@ -183,6 +183,7 @@ input{font-family:inherit;}
   color:var(--brand);font-weight:700;font-size:14px;white-space:nowrap;
 }
 .table-pick-btn.empty{border-style:dashed;}
+.main-type-bar{display:none;background:var(--bg);flex-shrink:0;}
 .table-pick-btn.hidden{display:none;}
 .table-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:14px 18px;}
 .table-cell{
@@ -536,6 +537,8 @@ input{font-family:inherit;}
   }
   #cartPane.open{transform:translateY(0);}
   .cart-fab{display:flex;}
+  .main-type-bar{display:flex;}
+  #cartPane .order-type-bar{display:none;}
   .undo-fab:not(.hidden){display:block;}
   #app{height:calc(100vh - 56px);}
 }
