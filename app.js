@@ -139,6 +139,36 @@ function choiceExtra(item, ch){
   if(hasColdPrice(item) && COLD_LABEL_RE.test(ch.label)) return round2(item.coldPrice - item.price);
   return ch.extra || 0;
 }
+// Old way of pricing cold drinks: one surcharge for every drink, typed into the drink-options text
+// ("温度: 热,冷+0.3"). Converts it once into a cold price on each drink (price + surcharge, so nothing
+// changes on the till today) and strips the "+0.3" from the text; after that every drink's cold
+// price is edited on its own. Idempotent, and never overwrites a cold price that was set by hand.
+function migrateColdSurcharge(){
+  let extra = null;
+  const lines = (state.settings.drinkOptions||"").split("\n").map(line=>{
+    const parts = line.split(/[:：]/);
+    if(parts.length < 2) return line;
+    let hit = false;
+    const toks = parts.slice(1).join(":").split(/[,，、]/).map(t=>{
+      const m = /^(.*?)\s*[+＋]\s*(\d+(?:\.\d+)?)\s*$/.exec(t.trim());
+      if(m && m[1] && COLD_LABEL_RE.test(m[1].trim()) && parseFloat(m[2]) > 0){ extra = round2(parseFloat(m[2])); hit = true; return m[1].trim(); }
+      return t.trim();
+    });
+    return hit ? parts[0].trim() + ": " + toks.join(",") : line;
+  });
+  if(extra === null) return 0;
+  let n = 0;
+  state.menu.forEach(cat=>{
+    if(!isBeverageCategory(cat)) return;
+    cat.items.forEach(it=>{
+      if(isCombo(it) || hasColdPrice(it)) return;
+      it.coldPrice = round2(it.price + extra); n++;
+    });
+  });
+  state.settings.drinkOptions = lines.join("\n");
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  return n || 1;
+}
 function itemDisplayName(it){ return it.name + (it.options ? ` (${it.options})` : ""); }
 // The one place a cart line becomes an order/receipt item, so options + beverage flag can't be
 // dropped by one of the several paths (full cart, equal split, reopen, ...) that build items.
@@ -1881,6 +1911,7 @@ function connectCloudSync(configObj, shopId, isReconnect){
     if(Array.isArray(remote.menu)) state.menu = remote.menu;
     if(remote.lastModified) state.lastModified = remote.lastModified;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    migrateColdSurcharge(); // another device may still hold the old global "冷+x" setting
     applyingRemoteCloudState = false;
 
     document.getElementById("shopName").textContent = state.settings.shopName;
@@ -2139,6 +2170,7 @@ function applyBackupJson(jsonText){
   });
   history = Array.isArray(payload.history) ? payload.history : [];
   heldOrders = Array.isArray(payload.heldOrders) ? payload.heldOrders : [];
+  migrateColdSurcharge();
   saveState(); saveHistory(); saveHeldOrders();
   activeCategory = state.menu[0] ? state.menu[0].id : null;
   document.getElementById("shopName").textContent = state.settings.shopName;
@@ -3539,6 +3571,7 @@ function tickClock(){
 
 // ---------- Wire up events ----------
 function init(){
+  const migratedCold = migrateColdSurcharge();
   orderType = defaultOrderType();
   document.getElementById("shopName").textContent = state.settings.shopName;
   ensureOrderSeq();
@@ -3552,6 +3585,7 @@ function init(){
   tickClock();
   setInterval(tickClock, 15000);
   initCloudSyncOnLoad();
+  if(migratedCold) alertToast("已把旧的「冷+加价」转成每个饮料各自的冷价,可到 设置→菜单 逐个修改");
   checkForRememberedPrinter();
 
   document.getElementById("btnClearCart").onclick = ()=>{
