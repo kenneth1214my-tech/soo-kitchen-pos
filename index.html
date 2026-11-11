@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202611121000">
+<link rel="manifest" href="manifest.json?v=202611121100">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202611121000">
-<link rel="icon" href="icon-192.png?v=202611121000">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611121100">
+<link rel="icon" href="icon-192.png?v=202611121100">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202611121000">
+<link rel="stylesheet" href="style.css?v=202611121100">
 </head>
 <body>
 
@@ -46,8 +46,8 @@
          hidden drawer (<=820px), so type/table can be set before the first dish is tapped. -->
     <div class="order-type-bar main-type-bar">
       <div class="order-type-seg">
-        <button id="mainTypeDineIn" class="ot-btn active" data-type="dinein">🍽 堂食</button>
-        <button id="mainTypeTakeaway" class="ot-btn" data-type="takeaway">🥡 外带</button>
+        <button id="mainTypeDineIn" class="ot-btn active" data-type="dinein">🍽 堂食<small>Dine In</small></button>
+        <button id="mainTypeTakeaway" class="ot-btn" data-type="takeaway">🥡 外带<small>Take Away</small></button>
       </div>
       <button id="mainPickTable" class="table-pick-btn">桌号: 未选 ▾</button>
     </div>
@@ -67,8 +67,8 @@
     </div>
     <div class="order-type-bar">
       <div class="order-type-seg">
-        <button id="btnTypeDineIn" class="ot-btn active" data-type="dinein">🍽 堂食</button>
-        <button id="btnTypeTakeaway" class="ot-btn" data-type="takeaway">🥡 外带</button>
+        <button id="btnTypeDineIn" class="ot-btn active" data-type="dinein">🍽 堂食<small>Dine In</small></button>
+        <button id="btnTypeTakeaway" class="ot-btn" data-type="takeaway">🥡 外带<small>Take Away</small></button>
       </div>
       <button id="btnPickTable" class="table-pick-btn">桌号: 未选 ▾</button>
     </div>
@@ -343,8 +343,8 @@
         <textarea id="inputDrinkOptions" rows="4" placeholder="温度: 热,冷&#10;糖度: 正常,少糖,无糖&#10;冰量: 正常冰,少冰,去冰"></textarea>
         <label>新订单默认类型</label>
         <select id="inputDefaultOrderType" class="select-input">
-          <option value="dinein">堂食</option>
-          <option value="takeaway">外带</option>
+          <option value="dinein">堂食 Dine In</option>
+          <option value="takeaway">外带 Take Away</option>
         </select>
 
         <label class="checkbox-row"><input type="checkbox" id="inputTaxEnabled"> 启用服务税 (SST)</label>
@@ -469,6 +469,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202611121000" defer></script>
+<script src="app.js?v=202611121100" defer></script>
 </body>
 </html>

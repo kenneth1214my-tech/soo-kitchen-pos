@@ -166,7 +166,7 @@ function render(orders){
         <td>${escapeHtml(o.orderNo)}</td>
         <td>${escapeHtml(o.date)} ${escapeHtml(o.time)}</td>
         <td>${o.paymentMethod==="cash"?"现金":"电子钱包"}</td>
-        <td>${o.orderType==="takeaway" ? "外带" : o.orderType==="dinein" ? "堂食"+(o.table ? " 桌"+escapeHtml(o.table) : "") : ""}</td>
+        <td>${o.orderType==="takeaway" ? "外带 Take Away" : o.orderType==="dinein" ? "堂食 Dine In"+(o.table ? " 桌"+escapeHtml(o.table) : "") : ""}</td>
         <td>${fmt(o.total)}</td>
         <td>${o.voided?"已作废":""}</td>
       </tr>

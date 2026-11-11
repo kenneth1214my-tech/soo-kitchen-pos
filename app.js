@@ -149,8 +149,8 @@ function ordersForItemStats(orders){
 
 // "" for orders recorded before this feature existed (no orderType field) — callers just skip the line.
 function orderTypeLabel(type, table){
-  if(type==="takeaway") return "外带";
-  if(type==="dinein") return table ? `堂食 · 桌 ${table}` : "堂食";
+  if(type==="takeaway") return "外带 Take Away";
+  if(type==="dinein") return table ? `堂食 Dine In · 桌 ${table}` : "堂食 Dine In";
   return "";
 }
 
@@ -491,7 +491,7 @@ function renderCart(){
     pickBtn.classList.toggle("empty", !orderTable);
     pickBtn.textContent = `桌号: ${orderTable || "未选"} ▾`;
   });
-  document.getElementById("cartFabType").textContent = " · " + (orderType==="takeaway" ? "外带" : (orderTable ? "桌 " + orderTable : "堂食"));
+  document.getElementById("cartFabType").textContent = " · " + (orderType==="takeaway" ? "外带 Take Away" : (orderTable ? "桌 " + orderTable : "堂食 Dine In"));
 
   document.getElementById("subtotalVal").textContent = fmt(cartSubtotal());
 
@@ -2084,7 +2084,7 @@ function exportHistoryCsv(){
     o.orderNo, o.date, o.time, o.paymentMethod==="cash"?"现金":"电子钱包",
     o.subtotal, o.discount||0, o.tax||0, o.roundingAdj||0, o.total,
     o.isSplit?"是":"否", o.voided?"是":"否",
-    o.orderType==="dinein" ? "堂食" : o.orderType==="takeaway" ? "外带" : "", o.table || ""
+    o.orderType==="dinein" ? "堂食 Dine In" : o.orderType==="takeaway" ? "外带 Take Away" : "", o.table || ""
   ]));
   const validRows = filtered.filter(o=>!o.voided);
   rows.push([]);
@@ -2522,8 +2522,8 @@ function showSettlement(){
     ${s.totalTax>0 ? `<div class="r-line"><span>服务税总额</span><span>${fmt(s.totalTax)}</span></div>` : ""}
     <div class="r-line r-total"><span>总营业额</span><span>${fmt(s.totalSales)}</span></div>
     ${(s.dineInCount+s.takeawayCount)>0 ? `<hr>
-    <div class="r-line"><span>堂食 (${s.dineInCount}单)</span><span>${fmt(s.dineInSales)}</span></div>
-    <div class="r-line"><span>外带 (${s.takeawayCount}单)</span><span>${fmt(s.takeawaySales)}</span></div>` : ""}
+    <div class="r-line"><span>堂食 Dine In (${s.dineInCount}单)</span><span>${fmt(s.dineInSales)}</span></div>
+    <div class="r-line"><span>外带 Take Away (${s.takeawayCount}单)</span><span>${fmt(s.takeawaySales)}</span></div>` : ""}
     ${s.beverageCups>0 ? `<hr><div class="r-line"><span>饮料 (${s.beverageCups}杯)</span><span>${fmt(s.beverageSales)}</span></div>` : ""}
     <hr>
     <div class="r-line"><span>应有现金 (抽屉清点用)</span><span>${fmt(s.cashSales)}</span></div>
@@ -2547,8 +2547,8 @@ function settlementToPrintBlocks(s, dateStr){
   blocks.push({ text: `总营业额  ${fmt(s.totalSales)}`, bold:true, size:"lg", align:"right", spacingAfter:10 });
   if(s.dineInCount+s.takeawayCount>0){
     blocks.push({ text: "--------------------------------", spacingAfter:4 });
-    blocks.push({ text: `堂食 (${s.dineInCount}单)  ${fmt(s.dineInSales)}`, align:"right" });
-    blocks.push({ text: `外带 (${s.takeawayCount}单)  ${fmt(s.takeawaySales)}`, align:"right", spacingAfter:6 });
+    blocks.push({ text: `堂食 Dine In (${s.dineInCount}单)  ${fmt(s.dineInSales)}`, align:"right" });
+    blocks.push({ text: `外带 Take Away (${s.takeawayCount}单)  ${fmt(s.takeawaySales)}`, align:"right", spacingAfter:6 });
   }
   if(s.beverageCups>0){
     blocks.push({ text: "--------------------------------", spacingAfter:4 });
