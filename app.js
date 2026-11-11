@@ -122,7 +122,11 @@ function drinkOptionGroups(){
     const parts = line.split(/[:：]/);
     if(parts.length<2) return null;
     const name = parts[0].trim();
-    const choices = parts.slice(1).join(":").split(/[,，、]/).map(x=>x.trim()).filter(Boolean);
+    // A choice may carry a surcharge written right after it: "冷+0.5" -> label 冷, +RM0.50.
+    const choices = parts.slice(1).join(":").split(/[,，、]/).map(x=>x.trim()).filter(Boolean).map(tok=>{
+      const m = /^(.*?)\s*[+＋]\s*(\d+(?:\.\d+)?)\s*$/.exec(tok);
+      return m && m[1] ? { label: m[1].trim(), extra: round2(parseFloat(m[2])) } : { label: tok, extra: 0 };
+    });
     return name && choices.length ? { name, choices } : null;
   }).filter(Boolean);
 }
@@ -130,7 +134,7 @@ function itemDisplayName(it){ return it.name + (it.options ? ` (${it.options})` 
 // The one place a cart line becomes an order/receipt item, so options + beverage flag can't be
 // dropped by one of the several paths (full cart, equal split, reopen, ...) that build items.
 function cartLineToOrderItem(c){
-  return { name:c.name, price:c.price, qty:c.qty, note:c.note||"", comboContents:c.comboContents||[], options:c.options||"", isBeverage:!!c.isBeverage };
+  return { name:c.name, price:c.price, qty:c.qty, note:c.note||"", comboContents:c.comboContents||[], options:c.options||"", optionExtra:c.optionExtra||0, isBeverage:!!c.isBeverage };
 }
 // Equal-split bills each carry the WHOLE order's items (see showReceipt), so summing items over all
 // of them would count every dish once per guest. Keep only the first bill of each equal-split group.
@@ -349,10 +353,11 @@ function undoCart(){
   alertToast("已撤销上一步");
 }
 
-function addToCart(item, options){
+function addToCart(item, options, extra){
   if(blockIfSplitInProgress()) return;
   snapshotCart();
   options = options || "";
+  extra = extra || 0;
   // Same dish with different options (热 vs 冷) must be separate cart lines, so the options are part
   // of the line key. Every cart/split helper treats itemId as an opaque key, so a suffix is safe.
   const key = options ? item.id + "#" + options : item.id;
@@ -360,7 +365,7 @@ function addToCart(item, options){
   if(existing){ existing.qty++; }
   else{
     const cat = findCategoryOfItem(item.id);
-    cart.push({ itemId:key, name:item.name, price:item.price, qty:1, note:"", comboContents: resolveComboContents(item), options, isBeverage: !!(cat && isBeverageCategory(cat)) });
+    cart.push({ itemId:key, name:item.name, price:round2(item.price + extra), optionExtra:extra, qty:1, note:"", comboContents: resolveComboContents(item), options, isBeverage: !!(cat && isBeverageCategory(cat)) });
   }
   renderCart();
 }
@@ -390,25 +395,35 @@ function openDrinkOptionModal(item){
     g.choices.forEach(ch=>{
       const b = document.createElement("button");
       b.className = "opt-choice";
-      b.textContent = ch;
+      b.innerHTML = escapeHtml(ch.label) + (ch.extra>0 ? `<small>+${fmt(ch.extra)}</small>` : "");
       b.onclick = ()=>{
         // tapping the chosen one again clears it — a group is optional
-        if(drinkOptionPick[g.name]===ch) delete drinkOptionPick[g.name]; else drinkOptionPick[g.name] = ch;
-        wrap.querySelectorAll(".opt-choice").forEach(x=> x.classList.toggle("active", drinkOptionPick[g.name]===x.textContent));
+        if(drinkOptionPick[g.name] && drinkOptionPick[g.name].label===ch.label) delete drinkOptionPick[g.name]; else drinkOptionPick[g.name] = ch;
+        wrap.querySelectorAll(".opt-choice").forEach((x, i)=> x.classList.toggle("active", !!drinkOptionPick[g.name] && drinkOptionPick[g.name].label===g.choices[i].label));
+        updateDrinkOptionTotal();
       };
       wrap.appendChild(b);
     });
     box.appendChild(row);
   });
+  updateDrinkOptionTotal();
   showModal("drinkOptionModal");
+}
+function drinkOptionExtra(){
+  return round2(Object.values(drinkOptionPick).reduce((s,ch)=>s+(ch.extra||0),0));
+}
+function updateDrinkOptionTotal(){
+  if(!drinkOptionItem) return;
+  document.getElementById("btnConfirmDrinkOptions").textContent = `加入订单 · ${fmt(drinkOptionItem.price + drinkOptionExtra())}`;
 }
 function confirmDrinkOptions(){
   if(!drinkOptionItem) return;
-  const picked = drinkOptionGroups().map(g=>drinkOptionPick[g.name]).filter(Boolean).join(" · ");
+  const picked = drinkOptionGroups().map(g=>drinkOptionPick[g.name]).filter(Boolean).map(ch=>ch.label).join(" · ");
+  const extra = drinkOptionExtra();
   const item = drinkOptionItem;
   drinkOptionItem = null;
   hideModal("drinkOptionModal");
-  addToCart(item, picked);
+  addToCart(item, picked, extra);
 }
 function changeQty(itemId, delta){
   if(blockIfSplitInProgress()) return;
@@ -1167,7 +1182,7 @@ function reopenOrder(orderNo){
       // any units added afterward via the menu grid would silently inherit the stale price too.
       const opts = it.options || "";
       const baseId = menuItem ? menuItem.id : "reopen_"+it.name;
-      return { itemId: opts ? baseId+"#"+opts : baseId, name: it.name, price: menuItem ? menuItem.price : it.price, qty: it.qty, note: it.note||"", comboContents: it.comboContents||[], options: opts, isBeverage: !!it.isBeverage };
+      return { itemId: opts ? baseId+"#"+opts : baseId, name: it.name, price: menuItem ? round2(menuItem.price + (it.optionExtra||0)) : it.price, optionExtra: it.optionExtra||0, qty: it.qty, note: it.note||"", comboContents: it.comboContents||[], options: opts, isBeverage: !!it.isBeverage };
     });
     resetOrderState();
     orderType = ord.orderType || defaultOrderType();
