@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202610161100">
+<link rel="manifest" href="manifest.json?v=202611111000">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202610161100">
-<link rel="icon" href="icon-192.png?v=202610161100">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611111000">
+<link rel="icon" href="icon-192.png?v=202611111000">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202610161100">
+<link rel="stylesheet" href="style.css?v=202611111000">
 </head>
 <body>
 
@@ -55,6 +55,13 @@
         <button id="btnSplitBill" class="link-btn muted-link">拆分账单</button>
         <button id="btnClearCart" class="link-btn">清空</button>
       </div>
+    </div>
+    <div class="order-type-bar">
+      <div class="order-type-seg">
+        <button id="btnTypeDineIn" class="ot-btn active" data-type="dinein">🍽 堂食</button>
+        <button id="btnTypeTakeaway" class="ot-btn" data-type="takeaway">🥡 外带</button>
+      </div>
+      <button id="btnPickTable" class="table-pick-btn">桌号: 未选 ▾</button>
     </div>
     <div id="cartList"></div>
     <div class="cart-summary">
@@ -207,6 +214,16 @@
   </div>
 </div>
 
+<!-- Table Picker Modal -->
+<div id="tableModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span>选择桌号</span><button class="close-btn" data-close="tableModal">✕</button></div>
+    <p class="hint" style="text-align:left;padding:0 18px;margin:10px 0 0;">橙色 = 这桌已有挂起(未结账)的订单</p>
+    <div id="tableGrid" class="table-grid"></div>
+    <div style="padding:0 18px;"><button id="btnClearTable" class="secondary-btn" style="width:100%;">不指定桌号</button></div>
+  </div>
+</div>
+
 <!-- Held Orders Modal -->
 <div id="heldOrdersModal" class="modal hidden">
   <div class="modal-box wide">
@@ -300,6 +317,14 @@
 
         <label>收据底部文字 (留空则不显示)</label>
         <input type="text" id="inputReceiptFooter" placeholder="例如：谢谢光临 ， THANK YOU .">
+
+        <label>桌号列表 (堂食用,用逗号分隔,留空则不显示选桌)</label>
+        <input type="text" id="inputTableList" placeholder="例如：1,2,3,4,5,6,A1,A2">
+        <label>新订单默认类型</label>
+        <select id="inputDefaultOrderType" class="select-input">
+          <option value="dinein">堂食</option>
+          <option value="takeaway">外带</option>
+        </select>
 
         <label class="checkbox-row"><input type="checkbox" id="inputTaxEnabled"> 启用服务税 (SST)</label>
         <label>税率 (%)</label>
@@ -422,6 +447,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202610161100" defer></script>
+<script src="app.js?v=202611111000" defer></script>
 </body>
 </html>

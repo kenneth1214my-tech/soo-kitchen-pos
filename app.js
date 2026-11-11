@@ -19,6 +19,8 @@ const DEFAULT_STATE = {
     deviceLabel:"",
     paperWidth:"58",
     autoPrintKitchen:true,
+    tableList:"1,2,3,4,5,6,7,8,9,10",
+    defaultOrderType:"dinein",
     promotions:[]
   },
   menu:[
@@ -90,6 +92,22 @@ let cart = []; // {itemId, name, price, qty, note}
 let activeCategory = state.menu[0] ? state.menu[0].id : null;
 let unlockedSettings = false;
 let discount = null; // {type:'percent'|'amount', value:number}
+// Dine-in / take-away for the order being built. Reset to the shop's default by resetOrderState()
+// at every "start a new order" point, so a take-away tap on one customer never leaks into the next.
+let orderType = "dinein"; // "dinein" | "takeaway"
+let orderTable = null;    // table label (string) — only meaningful for dine-in
+
+function defaultOrderType(){ return state.settings.defaultOrderType==="takeaway" ? "takeaway" : "dinein"; }
+function tableOptions(){
+  const seen = new Set();
+  return (state.settings.tableList||"").split(/[,，、;；\s]+/).map(t=>t.trim()).filter(t=>t && !seen.has(t) && seen.add(t));
+}
+// "" for orders recorded before this feature existed (no orderType field) — callers just skip the line.
+function orderTypeLabel(type, table){
+  if(type==="takeaway") return "外带";
+  if(type==="dinein") return table ? `堂食 · 桌 ${table}` : "堂食";
+  return "";
+}
 
 function fmt(n){ return "RM" + (Math.round((n||0)*100)/100).toFixed(2); }
 function round2(n){ return Math.round(n*100)/100; }
@@ -256,6 +274,8 @@ function blockIfSplitInProgress(){
 }
 function resetOrderState(){
   cartUndoStack = [];
+  orderType = defaultOrderType();
+  orderTable = null;
   discount = null;
   activeOrderNo = null;
   splitGroups = null;
@@ -279,6 +299,7 @@ function undoCart(){
   if(!snap){ alertToast("没有可撤销的操作"); return; }
   cart = snap.cart;
   if(snap.withDiscount) discount = snap.discount;
+  if(snap.orderType){ orderType = snap.orderType; orderTable = snap.table || null; }
   renderCart();
   alertToast("已撤销上一步");
 }
@@ -362,6 +383,13 @@ function renderCart(){
     });
   }
 
+  document.getElementById("btnTypeDineIn").classList.toggle("active", orderType==="dinein");
+  document.getElementById("btnTypeTakeaway").classList.toggle("active", orderType==="takeaway");
+  const pickBtn = document.getElementById("btnPickTable");
+  pickBtn.classList.toggle("hidden", orderType!=="dinein" || tableOptions().length===0);
+  pickBtn.classList.toggle("empty", !orderTable);
+  pickBtn.textContent = `桌号: ${orderTable || "未选"} ▾`;
+
   document.getElementById("subtotalVal").textContent = fmt(cartSubtotal());
 
   const rowDiscount = document.getElementById("rowDiscount");
@@ -398,14 +426,47 @@ function renderCart(){
   document.getElementById("cartFabTotal").textContent = fmt(cartTotal());
 }
 
+// ---------- Dine-in / take-away + table ----------
+function setOrderType(type){
+  if(blockIfSplitInProgress()) return;
+  orderType = type;
+  if(type==="takeaway") orderTable = null;
+  renderCart();
+}
+
+function openTableModal(){
+  if(blockIfSplitInProgress()) return;
+  const grid = document.getElementById("tableGrid");
+  grid.innerHTML = "";
+  tableOptions().forEach(t=>{
+    const heldCount = heldOrders.filter(h=>h.orderType==="dinein" && h.table===t).length;
+    const cell = document.createElement("button");
+    cell.className = "table-cell" + (heldCount ? " occupied" : "") + (orderTable===t ? " selected" : "");
+    cell.innerHTML = `${escapeHtml(t)}${heldCount ? `<small>有单${heldCount>1?" x"+heldCount:""}</small>` : ""}`;
+    cell.onclick = ()=>{
+      orderTable = t;
+      hideModal("tableModal");
+      renderCart();
+    };
+    grid.appendChild(cell);
+  });
+  showModal("tableModal");
+}
+
 // ---------- Hold / park order ----------
 function holdCurrentOrder(){
   if(cart.length===0) return;
   if(blockIfSplitInProgress()) return;
-  const label = prompt("给这张挂起的单起个名字(例如桌号/顾客名),留空则自动编号") || "";
+  // A dine-in order with a table picked is named after the table by default, so the kitchen ticket
+  // and the 挂起 list identify it without anyone having to type anything.
+  const defaultLabel = (orderType==="dinein" && orderTable) ? "桌 " + orderTable : "";
+  const label = prompt("给这张挂起的单起个名字(例如桌号/顾客名),留空则自动编号", defaultLabel);
+  if(label===null) return; // cancelled the prompt — keep the cart as it is
   heldOrders.push({
     id: uid(),
-    label: label.trim() || ("挂单 " + (heldOrders.length+1)),
+    label: label.trim() || defaultLabel || ("挂单 " + (heldOrders.length+1)),
+    orderType: orderType,
+    table: orderType==="dinein" ? (orderTable || null) : null,
     cart: cart.map(c=>Object.assign({}, c)),
     discount: discount ? Object.assign({}, discount) : null,
     heldAt: Date.now()
@@ -447,6 +508,7 @@ function renderHeldOrdersList(){
     row.innerHTML = `
       <div>
         <div class="hd-label">${escapeHtml(h.label)} · ${fmt(sub)}</div>
+        ${orderTypeLabel(h.orderType, h.table) ? `<div class="hd-detail" style="font-weight:700;">${escapeHtml(orderTypeLabel(h.orderType, h.table))}</div>` : ""}
         <div class="hd-detail">${escapeHtml(detail)}</div>
       </div>
       <div class="h-actions">
@@ -459,7 +521,7 @@ function renderHeldOrdersList(){
       // Held orders don't have an orderNo yet (that's only assigned at checkout) — use the
       // table/customer label the staff gave it instead, so the kitchen ticket still identifies
       // which table this is for.
-      printKitchenTicketBT({ orderNo: h.label, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items: h.cart });
+      printKitchenTicketBT({ orderNo: h.label, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items: h.cart, orderType: h.orderType, table: h.table });
     };
     row.querySelector(".resume").onclick = ()=> resumeHeldOrder(h.id);
     row.querySelector(".void").onclick = ()=>{
@@ -486,6 +548,8 @@ function resumeHeldOrder(id){
   const held = heldOrders[idx];
   cart = held.cart.map(c=>Object.assign({}, c));
   resetOrderState();
+  orderType = held.orderType || defaultOrderType();
+  orderTable = held.table || null;
   discount = held.discount ? Object.assign({}, held.discount) : null;
   heldOrders.splice(idx,1);
   saveHeldOrders();
@@ -760,6 +824,8 @@ function finalizeOrderInner(paymentMethod, extra){
     change: extra && extra.change,
     isSplit: !!ctx.label,
     splitKind: ctx.splitKind || null,
+    orderType: orderType,
+    table: orderType==="dinein" ? (orderTable || null) : null,
     voided: false
   };
   history.unshift(order);
@@ -782,15 +848,15 @@ function finalizeOrderInner(paymentMethod, extra){
     state.nextOrderSeq++;
     saveStateLocalOnly();
     showReceipt(order, false);
-    maybeAutoPrintKitchen(order.orderNo, order.items);
+    maybeAutoPrintKitchen(order.orderNo, order.items, order.orderType, order.table);
     clearCart();
     closeMobileCart();
   }
 }
 
-function maybeAutoPrintKitchen(orderNo, items){
+function maybeAutoPrintKitchen(orderNo, items, type, table){
   if(!(state.settings.autoPrintKitchen && btPrinterChar)) return;
-  printKitchenTicketBT({ orderNo, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items });
+  printKitchenTicketBT({ orderNo, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items, orderType: type, table });
 }
 
 function showReceipt(order, returnToSplitList){
@@ -815,6 +881,7 @@ function showReceipt(order, returnToSplitList){
     <div class="r-shop">${escapeHtml(state.settings.shopName)}</div>
     ${shopAddress ? `<div class="r-meta">${escapeHtml(shopAddress)}</div>` : ""}
     <div class="r-meta">订单 ${escapeHtml(order.orderNo)} · ${order.date} ${order.time}</div>
+    ${orderTypeLabel(order.orderType, order.table) ? `<div class="r-meta" style="font-size:15px;font-weight:800;color:var(--text);">${escapeHtml(orderTypeLabel(order.orderType, order.table))}</div>` : ""}
     <hr>
     ${itemsBlock}
     <div class="r-line"><span>${isEqualSplit ? "本账单应付 (均分)" : "小计"}</span><span>${fmt(order.subtotal)}</span></div>
@@ -874,7 +941,12 @@ function computeDailySummary(todays){
     cashSales: round2(valid.filter(o=>o.paymentMethod==="cash").reduce((s,o)=>s+o.total,0)),
     qrSales: round2(valid.filter(o=>o.paymentMethod==="qr").reduce((s,o)=>s+o.total,0)),
     totalDiscount: round2(valid.reduce((s,o)=>s+(o.discount||0),0)),
-    totalTax: round2(valid.reduce((s,o)=>s+(o.tax||0),0))
+    totalTax: round2(valid.reduce((s,o)=>s+(o.tax||0),0)),
+    // Orders from before dine-in/take-away existed have no orderType and land in neither bucket.
+    dineInCount: valid.filter(o=>o.orderType==="dinein").length,
+    dineInSales: round2(valid.filter(o=>o.orderType==="dinein").reduce((s,o)=>s+o.total,0)),
+    takeawayCount: valid.filter(o=>o.orderType==="takeaway").length,
+    takeawaySales: round2(valid.filter(o=>o.orderType==="takeaway").reduce((s,o)=>s+o.total,0))
   };
 }
 
@@ -922,7 +994,7 @@ function openHistory(){
       row.innerHTML = `
         <div>
           <div class="h-no">${escapeHtml(o.orderNo)} · ${fmt(o.total)}</div>
-          <div class="h-method">${o.time} · ${o.paymentMethod==="cash"?"现金":"电子钱包"}${o.isSplit?" · 分单":""}</div>
+          <div class="h-method">${o.time} · ${o.paymentMethod==="cash"?"现金":"电子钱包"}${o.isSplit?" · 分单":""}${orderTypeLabel(o.orderType, o.table) ? " · "+escapeHtml(orderTypeLabel(o.orderType, o.table)) : ""}</div>
         </div>
         ${o.voided ? `<span class="h-voided-tag">已作废</span>` : `
           <div class="h-actions">
@@ -983,6 +1055,8 @@ function reopenOrder(orderNo){
       return { itemId: menuItem ? menuItem.id : "reopen_"+it.name, name: it.name, price: menuItem ? menuItem.price : it.price, qty: it.qty, note: it.note||"", comboContents: it.comboContents||[] };
     });
     resetOrderState();
+    orderType = ord.orderType || defaultOrderType();
+    orderTable = ord.table || null;
     // resetOrderState() nulls `discount` — resumeHeldOrder() (its sibling for 挂单) restores it
     // afterward, this didn't, so reopening a discounted order silently dropped the discount and
     // could overcharge the customer if staff didn't notice and manually reapply it. A finalized
@@ -1234,7 +1308,7 @@ function confirmSplitInner(){
 
   splitGroups = groups.map(g=>Object.assign({paid:false}, g));
   activeOrderNo = peekOrderNo();
-  maybeAutoPrintKitchen(activeOrderNo, cart.map(c=>({name:c.name, qty:c.qty, note:c.note||""})));
+  maybeAutoPrintKitchen(activeOrderNo, cart.map(c=>({name:c.name, qty:c.qty, note:c.note||""})), orderType, orderType==="dinein" ? orderTable : null);
   hideModal("splitModal");
   renderSplitPayList();
   showModal("splitPayModal");
@@ -1305,6 +1379,8 @@ function populateSettingsForm(){
   document.getElementById("inputDeviceLabel").value = state.settings.deviceLabel || "";
   document.getElementById("inputPaperWidth").value = state.settings.paperWidth || "58";
   document.getElementById("inputAutoPrintKitchen").checked = state.settings.autoPrintKitchen!==false;
+  document.getElementById("inputTableList").value = state.settings.tableList || "";
+  document.getElementById("inputDefaultOrderType").value = state.settings.defaultOrderType==="takeaway" ? "takeaway" : "dinein";
   document.getElementById("inputNewPin").value = "";
   document.getElementById("defaultPinWarning").classList.toggle("hidden", state.settings.pin!=="0000");
   updatePrinterStatus();
@@ -1391,6 +1467,8 @@ function saveGeneralSettings(){
   state.settings.deviceLabel = document.getElementById("inputDeviceLabel").value.trim();
   state.settings.paperWidth = document.getElementById("inputPaperWidth").value;
   state.settings.autoPrintKitchen = document.getElementById("inputAutoPrintKitchen").checked;
+  state.settings.tableList = document.getElementById("inputTableList").value.trim();
+  state.settings.defaultOrderType = document.getElementById("inputDefaultOrderType").value;
   const newPin = document.getElementById("inputNewPin").value.trim();
   if(newPin.length>=4){ state.settings.pin = newPin; }
   saveState();
@@ -1880,15 +1958,16 @@ function exportHistoryCsv(){
   const end = document.getElementById("csvEndDate").value || todayStr();
   const filtered = history.filter(o=> o.date>=start && o.date<=end);
   if(filtered.length===0){ alertToast("这段范围内没有订单记录"); return; }
-  const rows = [["订单号","日期","时间","付款方式","小计","折扣","服务税","现金四舍五入","总计","是否分单","是否作废"]];
+  const rows = [["订单号","日期","时间","付款方式","小计","折扣","服务税","现金四舍五入","总计","是否分单","是否作废","类型","桌号"]];
   filtered.forEach(o=> rows.push([
     o.orderNo, o.date, o.time, o.paymentMethod==="cash"?"现金":"电子钱包",
     o.subtotal, o.discount||0, o.tax||0, o.roundingAdj||0, o.total,
-    o.isSplit?"是":"否", o.voided?"是":"否"
+    o.isSplit?"是":"否", o.voided?"是":"否",
+    o.orderType==="dinein" ? "堂食" : o.orderType==="takeaway" ? "外带" : "", o.table || ""
   ]));
   const validRows = filtered.filter(o=>!o.voided);
   rows.push([]);
-  rows.push(["合计 (不含已作废)","","","", "", "", "", "", validRows.reduce((s,o)=>s+o.total,0).toFixed(2), "", ""]);
+  rows.push(["合计 (不含已作废)","","","", "", "", "", "", validRows.reduce((s,o)=>s+o.total,0).toFixed(2), "", "", "", ""]);
   const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n");
   downloadBlob("﻿"+csv, `sales-${start}_to_${end}.csv`, "text/csv;charset=utf-8");
   alertToast("销售记录已导出");
@@ -2268,7 +2347,9 @@ function receiptToPrintBlocks(order){
   blocks.push({ text: state.settings.shopName, size:"lg", bold:true, align:"center" });
   if(shopAddress) blocks.push({ text: shopAddress, size:"sm", align:"center" });
   blocks.push({ text: `订单 ${order.orderNo}`, bold:true, align:"center" });
-  blocks.push({ text: `${order.date} ${order.time}`, size:"sm", align:"center", spacingAfter:10 });
+  const typeLabel = orderTypeLabel(order.orderType, order.table);
+  blocks.push({ text: `${order.date} ${order.time}`, size:"sm", align:"center", spacingAfter: typeLabel ? 2 : 10 });
+  if(typeLabel) blocks.push({ text: typeLabel, bold:true, align:"center", spacingAfter:10 });
   order.items.forEach(it=>{
     blocks.push({ text: `${it.name} x${it.qty}${it.note?" ("+it.note+")":""}` });
     blocks.push({ text: `  ${fmt(it.price*it.qty)}`, align:"right" });
@@ -2319,6 +2400,9 @@ function showSettlement(){
     ${s.totalDiscount>0 ? `<div class="r-line"><span>折扣总额</span><span>-${fmt(s.totalDiscount)}</span></div>` : ""}
     ${s.totalTax>0 ? `<div class="r-line"><span>服务税总额</span><span>${fmt(s.totalTax)}</span></div>` : ""}
     <div class="r-line r-total"><span>总营业额</span><span>${fmt(s.totalSales)}</span></div>
+    ${(s.dineInCount+s.takeawayCount)>0 ? `<hr>
+    <div class="r-line"><span>堂食 (${s.dineInCount}单)</span><span>${fmt(s.dineInSales)}</span></div>
+    <div class="r-line"><span>外带 (${s.takeawayCount}单)</span><span>${fmt(s.takeawaySales)}</span></div>` : ""}
     <hr>
     <div class="r-line"><span>应有现金 (抽屉清点用)</span><span>${fmt(s.cashSales)}</span></div>
     <div class="r-meta" style="margin-top:10px;">打印时间: ${new Date().toLocaleString("en-MY")}</div>
@@ -2339,6 +2423,11 @@ function settlementToPrintBlocks(s, dateStr){
   if(s.totalDiscount>0) blocks.push({ text: `折扣总额  -${fmt(s.totalDiscount)}`, align:"right" });
   if(s.totalTax>0) blocks.push({ text: `服务税总额  ${fmt(s.totalTax)}`, align:"right" });
   blocks.push({ text: `总营业额  ${fmt(s.totalSales)}`, bold:true, size:"lg", align:"right", spacingAfter:10 });
+  if(s.dineInCount+s.takeawayCount>0){
+    blocks.push({ text: "--------------------------------", spacingAfter:4 });
+    blocks.push({ text: `堂食 (${s.dineInCount}单)  ${fmt(s.dineInSales)}`, align:"right" });
+    blocks.push({ text: `外带 (${s.takeawayCount}单)  ${fmt(s.takeawaySales)}`, align:"right", spacingAfter:6 });
+  }
   blocks.push({ text: "--------------------------------", spacingAfter:4 });
   blocks.push({ text: `应有现金 (抽屉清点用)  ${fmt(s.cashSales)}`, align:"right", spacingAfter:6 });
   blocks.push({ text: `打印时间: ${new Date().toLocaleString("en-MY")}`, size:"sm", align:"center" });
@@ -2348,6 +2437,10 @@ function settlementToPrintBlocks(s, dateStr){
 function kitchenTicketToPrintBlocks(order){
   const blocks = [];
   blocks.push({ text: `订单 ${order.orderNo}`, size:"lg", bold:true, align:"center" });
+  // Big and bold on purpose: the kitchen needs to see at a glance whether to plate it for a table
+  // (and which one) or bag it to go.
+  const typeLabel = orderTypeLabel(order.orderType, order.table);
+  if(typeLabel) blocks.push({ text: typeLabel, size:"lg", bold:true, align:"center" });
   blocks.push({ text: `${order.time}`, size:"sm", align:"center", spacingAfter:10 });
   order.items.forEach(it=>{
     blocks.push({ text: `${it.name}  x${it.qty}`, size:"lg", bold:true });
@@ -2931,6 +3024,7 @@ function tickClock(){
 
 // ---------- Wire up events ----------
 function init(){
+  orderType = defaultOrderType();
   document.getElementById("shopName").textContent = state.settings.shopName;
   ensureOrderSeq();
   renderCategoryTabs();
@@ -2950,12 +3044,16 @@ function init(){
     if(!confirm("确定清空当前订单?")) return;
     // clearCart() resets the undo history (it's also the post-checkout cleanup), so take the
     // snapshot afterwards — that way an accidental 清空 itself can be undone, discount included.
-    const before = { cart: cart.map(c=>Object.assign({}, c)), discount: discount ? Object.assign({}, discount) : null };
+    const before = { cart: cart.map(c=>Object.assign({}, c)), discount: discount ? Object.assign({}, discount) : null, orderType, table: orderTable };
     clearCart();
-    cartUndoStack.push({ cart: before.cart, discount: before.discount, withDiscount: true });
+    cartUndoStack.push({ cart: before.cart, discount: before.discount, withDiscount: true, orderType: before.orderType, table: before.table });
     renderCart();
   };
   document.getElementById("btnUndoCart").onclick = undoCart;
+  document.getElementById("btnTypeDineIn").onclick = ()=> setOrderType("dinein");
+  document.getElementById("btnTypeTakeaway").onclick = ()=> setOrderType("takeaway");
+  document.getElementById("btnPickTable").onclick = openTableModal;
+  document.getElementById("btnClearTable").onclick = ()=>{ orderTable = null; hideModal("tableModal"); renderCart(); };
   document.getElementById("btnUndoFab").onclick = undoCart;
   document.getElementById("btnCheckout").onclick = ()=> openCheckout(null);
   document.getElementById("btnCartMobile").onclick = toggleMobileCart;

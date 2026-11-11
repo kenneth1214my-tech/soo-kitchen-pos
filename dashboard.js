@@ -94,7 +94,9 @@ function computeStats(orders){
   const topItems = Object.keys(itemQty).map(name=>({name, qty:itemQty[name]}))
     .sort((a,b)=>b.qty-a.qty).slice(0,10);
 
-  return { totalRevenue, cashRevenue, qrRevenue, avg, orderCount: valid.length, dayRows, maxDay, topItems };
+  const dineInRevenue = valid.filter(o=>o.orderType==="dinein").reduce((s,o)=>s+(o.total||0),0);
+  const takeawayRevenue = valid.filter(o=>o.orderType==="takeaway").reduce((s,o)=>s+(o.total||0),0);
+  return { dineInRevenue, takeawayRevenue, totalRevenue, cashRevenue, qrRevenue, avg, orderCount: valid.length, dayRows, maxDay, topItems };
 }
 
 function render(orders){
@@ -103,6 +105,7 @@ function render(orders){
   document.getElementById("statOrders").textContent = stats.orderCount;
   document.getElementById("statAvg").textContent = fmt(stats.avg);
   document.getElementById("statSplit").textContent = `${fmt(stats.cashRevenue)} / ${fmt(stats.qrRevenue)}`;
+  document.getElementById("statType").textContent = `${fmt(stats.dineInRevenue)} / ${fmt(stats.takeawayRevenue)}`;
 
   const dayChart = document.getElementById("dayChart");
   if(stats.dayRows.length===0){
@@ -146,6 +149,7 @@ function render(orders){
         <td>${escapeHtml(o.orderNo)}</td>
         <td>${escapeHtml(o.date)} ${escapeHtml(o.time)}</td>
         <td>${o.paymentMethod==="cash"?"现金":"电子钱包"}</td>
+        <td>${o.orderType==="takeaway" ? "外带" : o.orderType==="dinein" ? "堂食"+(o.table ? " 桌"+escapeHtml(o.table) : "") : ""}</td>
         <td>${fmt(o.total)}</td>
         <td>${o.voided?"已作废":""}</td>
       </tr>
@@ -153,7 +157,7 @@ function render(orders){
     orderTableEl.innerHTML = `
       <div class="order-table-wrap">
         <table>
-          <thead><tr><th>订单号</th><th>时间</th><th>付款</th><th>总计</th><th></th></tr></thead>
+          <thead><tr><th>订单号</th><th>时间</th><th>付款</th><th>类型</th><th>总计</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
