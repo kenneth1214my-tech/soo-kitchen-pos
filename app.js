@@ -3156,6 +3156,303 @@ function addBeverageCategory(){
   alertToast("已新增「饮料 Drinks」分类,请按「+ 新增菜品」加入你的饮料和价格");
 }
 
+// ---------- Bulk menu import (Excel .xlsx / CSV / pasted cells) ----------
+// Everything here is dependency-free so it keeps working offline: .xlsx is just a zip of XML, which
+// the browser can unpack itself with DecompressionStream; CSV/TSV is parsed by hand.
+
+// Split pasted/CSV text into rows of cells. Delimiter is auto-detected (tab from an Excel copy,
+// comma/semicolon from a CSV, or a full-width comma), quotes and "" escapes are honoured.
+function parseDelimited(text){
+  text = String(text||"").replace(/^﻿/, "");
+  const firstLine = text.split(/\r?\n/).find(l=>l.trim()) || "";
+  let delim = ",", best = -1;
+  ["\t", ",", ";", "，"].forEach(d=>{
+    const n = firstLine.split(d).length - 1;
+    if(n > best){ best = n; delim = d; }
+  });
+  const rows = []; let row = [], cell = "", inQ = false;
+  for(let i=0; i<text.length; i++){
+    const ch = text[i];
+    if(inQ){
+      if(ch === '"'){ if(text[i+1] === '"'){ cell += '"'; i++; } else inQ = false; }
+      else cell += ch;
+    } else if(ch === '"' && cell === ""){ inQ = true; }
+    else if(ch === delim){ row.push(cell.trim()); cell = ""; }
+    else if(ch === "\n" || ch === "\r"){
+      if(ch === "\r" && text[i+1] === "\n") i++;
+      row.push(cell.trim()); rows.push(row); row = []; cell = "";
+    } else cell += ch;
+  }
+  if(cell !== "" || row.length){ row.push(cell.trim()); rows.push(row); }
+  return rows;
+}
+
+// Excel on a Chinese-language Windows saves "CSV" in GBK, not UTF-8 — try UTF-8 strictly, then GBK.
+function decodeTextBytes(buf){
+  try{ return new TextDecoder("utf-8", { fatal:true }).decode(buf); }
+  catch(e){
+    try{ return new TextDecoder("gbk").decode(buf); }
+    catch(e2){ return new TextDecoder("utf-8").decode(buf); }
+  }
+}
+
+async function inflateRawBytes(bytes){
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+// Minimal zip reader: central directory -> { read(name) -> utf8 text | null }.
+function openZip(buf){
+  const u8 = new Uint8Array(buf), dv = new DataView(buf), dec = new TextDecoder("utf-8");
+  let eocd = -1;
+  for(let i=u8.length-22; i>=Math.max(0, u8.length-22-65535); i--){
+    if(dv.getUint32(i, true) === 0x06054b50){ eocd = i; break; }
+  }
+  if(eocd < 0) throw new Error("not a zip");
+  const count = dv.getUint16(eocd+10, true);
+  let p = dv.getUint32(eocd+16, true);
+  const files = {};
+  for(let n=0; n<count; n++){
+    if(p+46 > u8.length || dv.getUint32(p, true) !== 0x02014b50) break;
+    const nlen = dv.getUint16(p+28, true), elen = dv.getUint16(p+30, true), clen = dv.getUint16(p+32, true);
+    files[dec.decode(u8.subarray(p+46, p+46+nlen))] = { method: dv.getUint16(p+10, true), csize: dv.getUint32(p+20, true), off: dv.getUint32(p+42, true) };
+    p += 46 + nlen + elen + clen;
+  }
+  return {
+    async read(name){
+      const f = files[name];
+      if(!f) return null;
+      const start = f.off + 30 + dv.getUint16(f.off+26, true) + dv.getUint16(f.off+28, true);
+      const data = u8.subarray(start, start + f.csize);
+      return dec.decode(f.method === 0 ? data : await inflateRawBytes(data));
+    }
+  };
+}
+function xmlUnescape(s){
+  return s.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-f]+);/gi, (m, e)=>{
+    e = e.toLowerCase();
+    if(e === "lt") return "<"; if(e === "gt") return ">"; if(e === "amp") return "&";
+    if(e === "quot") return '"'; if(e === "apos") return "'";
+    return String.fromCodePoint(e[1] === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+  });
+}
+function xmlAttr(tag, name){
+  const m = new RegExp("\\b" + name + '="([^"]*)"').exec(tag);
+  return m ? xmlUnescape(m[1]) : null;
+}
+function xmlTextRuns(xml){
+  let out = "", m;
+  const re = /<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g;
+  while((m = re.exec(xml))) out += m[1];
+  return xmlUnescape(out);
+}
+// First worksheet of an .xlsx -> array of rows (array of cell strings, blank rows kept as []).
+async function readXlsxRows(buf){
+  const zip = openZip(buf);
+  const wb = await zip.read("xl/workbook.xml");
+  if(wb === null) throw new Error("not xlsx");
+  let sheetPath = "xl/worksheets/sheet1.xml";
+  const firstSheet = /<sheet\b[^>]*>/.exec(wb);
+  const rels = await zip.read("xl/_rels/workbook.xml.rels");
+  if(firstSheet && rels){
+    const rid = xmlAttr(firstSheet[0], "r:id");
+    (rels.match(/<Relationship\b[^>]*>/g) || []).forEach(tag=>{
+      if(xmlAttr(tag, "Id") === rid){
+        const t = xmlAttr(tag, "Target") || "";
+        sheetPath = t.startsWith("/") ? t.slice(1) : "xl/" + t;
+      }
+    });
+  }
+  const sheet = await zip.read(sheetPath);
+  if(sheet === null) throw new Error("no sheet");
+  const shared = [];
+  const ssXml = await zip.read("xl/sharedStrings.xml");
+  if(ssXml){
+    (ssXml.match(/<si\b[^>]*?(?:\/>|>[\s\S]*?<\/si>)/g) || []).forEach(si=>{
+      shared.push(xmlTextRuns(si.replace(/<rPh\b[\s\S]*?<\/rPh>/g, "")));
+    });
+  }
+  const rows = [];
+  let rowSeq = 0, rm;
+  const rowRe = /<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g;
+  while((rm = rowRe.exec(sheet))){
+    rowSeq++;
+    const rNum = parseInt(xmlAttr(rm[1], "r"), 10) || rowSeq;
+    if(rNum > 100000) continue;
+    const row = [];
+    let colSeq = 0, cm;
+    const cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+    while((cm = cellRe.exec(rm[2] || ""))){
+      const ref = /^([A-Z]+)/i.exec(xmlAttr(cm[1], "r") || "");
+      let col = colSeq;
+      if(ref){ col = 0; for(const ch of ref[1].toUpperCase()) col = col*26 + ch.charCodeAt(0) - 64; col--; }
+      colSeq = col + 1;
+      if(col > 200) continue;
+      const type = xmlAttr(cm[1], "t"), inner = cm[2] || "";
+      const v = /<v>([\s\S]*?)<\/v>/.exec(inner);
+      let val = "";
+      if(type === "s") val = v ? (shared[parseInt(v[1], 10)] || "") : "";
+      else if(type === "inlineStr") val = xmlTextRuns(inner);
+      else if(v) val = xmlUnescape(v[1]);
+      row[col] = val;
+    }
+    while(rows.length < rNum - 1) rows.push([]);
+    rows[rNum - 1] = Array.from(row, c=>c === undefined ? "" : c);
+  }
+  return rows;
+}
+
+// Turn raw rows into a list of {cat,name,price,action} to review before anything is changed.
+// Layout: a header row naming the columns (分类/名称/价格, any order) or, without one, 3 columns =
+// 分类,名称,价格 and 2 columns = 名称,价格 (those go into the category picked in the dialog).
+// Match a category by name: exact (ignoring case/spaces) first, otherwise the Excel's "主食" finds the
+// menu's "主食 Mains" (same first word) — but only when that is unambiguous, so "饮料 Hot"/"饮料 Cold"
+// never get merged by accident.
+function findImportCategory(menu, name){
+  const norm = x=>String(x||"").trim().toLowerCase();
+  const n = norm(name);
+  const exact = menu.find(c=>norm(c.name) === n);
+  if(exact) return exact;
+  const word = x=>norm(x).split(/\s+/)[0];
+  // loose: one side is exactly the other side's first word ("主食" vs "主食 Mains")
+  const loose = menu.filter(c=>norm(c.name) === word(name) || n === word(c.name));
+  return loose.length === 1 ? loose[0] : null;
+}
+function buildMenuImportPlan(rows, menu, defaultCatName){
+  const errors = [], entries = [];
+  rows = (rows||[]).map(r=>(r||[]).map(c=>String(c == null ? "" : c).trim()));
+  const first = rows.findIndex(r=>r.some(Boolean));
+  if(first < 0) return { entries, errors:[{ line:0, reason:"没有读到任何内容" }], hasCatColumn:false };
+  const head = rows[first];
+  const idxOf = re=>head.findIndex(c=>re.test(c));
+  let colCat = idxOf(/分类|类别|category/i), colName = idxOf(/名称|品名|菜名|菜品|商品|产品|name|item|product/i), colPrice = idxOf(/价格|价钱|单价|售价|price/i);
+  let start = first + 1;
+  if(colName < 0 && colPrice < 0 && colCat < 0){
+    // no header row
+    start = first;
+    const width = Math.max(...rows.map(r=>r.length));
+    if(width >= 3){ colCat = 0; colName = 1; colPrice = 2; } else { colCat = -1; colName = 0; colPrice = 1; }
+  } else if(colName < 0 || colPrice < 0){
+    return { entries, errors:[{ line:first+1, reason:"表头里找不到「" + (colName < 0 ? "名称" : "价格") + "」这一栏" }], hasCatColumn:colCat >= 0 };
+  }
+  const seen = new Map();
+  for(let i=start; i<rows.length; i++){
+    const r = rows[i];
+    if(!r.some(Boolean)) continue;
+    const line = i + 1, name = r[colName] || "";
+    if(!name){ errors.push({ line, reason:"没有名称" }); continue; }
+    const priceRaw = (r[colPrice] || "").replace(/rm|\$|,|\s/gi, "");
+    if(priceRaw === ""){ errors.push({ line, name, reason:"没有价格" }); continue; }
+    const price = /^\d+(\.\d+)?$/.test(priceRaw) ? round2(parseFloat(priceRaw)) : NaN;
+    if(!isFinite(price)){ errors.push({ line, name, reason:"价格「" + r[colPrice] + "」看不懂" }); continue; }
+    const cat = (colCat >= 0 && r[colCat]) || defaultCatName || "新分类";
+    const key = cat.toLowerCase() + "\u0001" + name.toLowerCase();
+    if(seen.has(key)){ seen.get(key).price = price; continue; } // same dish listed twice: last one wins
+    const entry = { cat, name, price, action:"add", oldPrice:null, newCat:true };
+    seen.set(key, entry); entries.push(entry);
+  }
+  entries.forEach(e=>{
+    const mc = findImportCategory(menu, e.cat);
+    if(!mc) return;
+    e.newCat = false;
+    e.cat = mc.name;
+    const it = mc.items.find(i=>!isCombo(i) && (i.name||"").trim().toLowerCase() === e.name.toLowerCase());
+    if(it){ e.oldPrice = it.price; e.action = it.price === e.price ? "same" : "update"; }
+  });
+  return { entries, errors, hasCatColumn:colCat >= 0 };
+}
+
+function applyMenuImportPlan(plan){
+  let added = 0, updated = 0;
+  plan.entries.forEach(e=>{
+    let cat = findImportCategory(state.menu, e.cat);
+    if(!cat){ cat = { id:uid(), name:e.cat, items:[] }; state.menu.push(cat); }
+    const it = cat.items.find(i=>!isCombo(i) && (i.name||"").trim().toLowerCase() === e.name.toLowerCase());
+    if(it){ if(it.price !== e.price){ it.price = e.price; updated++; } }
+    else { cat.items.push({ id:uid(), name:e.name, price:e.price, available:true, image:"" }); added++; }
+  });
+  if(!activeCategory && state.menu.length) activeCategory = state.menu[0].id;
+  return { added, updated };
+}
+
+let menuImportRows = null;
+let menuImportPlan = null;
+function openMenuImportModal(){
+  menuImportRows = null; menuImportPlan = null;
+  document.getElementById("importFileInput").value = "";
+  document.getElementById("importPasteBox").value = "";
+  document.getElementById("importNewCatName").value = "";
+  const sel = document.getElementById("importTargetCat");
+  sel.innerHTML = state.menu.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("") + `<option value="__new__">➕ 新建分类…</option>`;
+  sel.value = state.menu.length ? state.menu[0].id : "__new__";
+  renderMenuImportPreview();
+  showModal("menuImportModal");
+}
+function importDefaultCatName(){
+  const sel = document.getElementById("importTargetCat");
+  if(sel.value === "__new__") return document.getElementById("importNewCatName").value.trim() || "新分类";
+  const c = state.menu.find(c=>c.id === sel.value);
+  return c ? c.name : "新分类";
+}
+function renderMenuImportPreview(){
+  const box = document.getElementById("importPreview"), btn = document.getElementById("btnConfirmImport");
+  document.getElementById("importNewCatName").classList.toggle("hidden", document.getElementById("importTargetCat").value !== "__new__");
+  if(!menuImportRows){ box.innerHTML = ""; btn.disabled = true; btn.textContent = "导入"; menuImportPlan = null; return; }
+  const plan = menuImportPlan = buildMenuImportPlan(menuImportRows, state.menu, importDefaultCatName());
+  const n = { add:0, update:0, same:0 };
+  plan.entries.forEach(e=>n[e.action]++);
+  const tag = { add:["新增","imp-add"], update:["改价","imp-upd"], same:["不变","imp-same"] };
+  const LIMIT = 300;
+  let html = `<div class="imp-summary">新增 <b>${n.add}</b> 项 · 更新价格 <b>${n.update}</b> 项 · 价格没变 ${n.same} 项` + (plan.errors.length ? ` · <span class="imp-err-count">跳过 ${plan.errors.length} 行</span>` : "") + `</div>`;
+  html += `<div class="imp-list">` + plan.entries.slice(0, LIMIT).map(e=>{
+    const price = e.action === "update" ? `${fmt(e.oldPrice)} → <b>${fmt(e.price)}</b>` : fmt(e.price);
+    return `<div class="imp-row"><span class="imp-tag ${tag[e.action][1]}">${tag[e.action][0]}</span><span class="imp-cat">${escapeHtml(e.cat)}${e.newCat ? " (新分类)" : ""}</span><span class="imp-name">${escapeHtml(e.name)}</span><span class="imp-price">${price}</span></div>`;
+  }).join("") + (plan.entries.length > LIMIT ? `<div class="imp-more">…还有 ${plan.entries.length - LIMIT} 项没显示(导入时会全部处理)</div>` : "") + `</div>`;
+  if(plan.errors.length){
+    html += `<div class="imp-errors">` + plan.errors.slice(0, 30).map(er=>`<div>第 ${er.line} 行${er.name ? "「" + escapeHtml(er.name) + "」" : ""}:${escapeHtml(er.reason)}</div>`).join("") + (plan.errors.length > 30 ? `<div>…另有 ${plan.errors.length - 30} 行</div>` : "") + `</div>`;
+  }
+  box.innerHTML = html;
+  const todo = n.add + n.update;
+  btn.disabled = todo === 0;
+  btn.textContent = todo ? `导入 ${todo} 项` : "没有需要导入的内容";
+}
+async function handleMenuImportFile(file){
+  if(!file) return;
+  try{
+    const buf = await file.arrayBuffer();
+    const b = new Uint8Array(buf.slice(0, 4));
+    let rows;
+    if(b[0] === 0x50 && b[1] === 0x4B){
+      if(typeof DecompressionStream === "undefined") throw new Error("该浏览器读不了 Excel 文件,请在 Excel 里另存为 CSV 再导入");
+      rows = await readXlsxRows(buf);
+    } else if(b[0] === 0xD0 && b[1] === 0xCF){
+      throw new Error("这是旧版 Excel (.xls),请在 Excel 里「另存为」.xlsx 或 CSV 再导入");
+    } else {
+      rows = parseDelimited(decodeTextBytes(buf));
+    }
+    document.getElementById("importPasteBox").value = "";
+    menuImportRows = rows;
+    renderMenuImportPreview();
+  }catch(err){
+    menuImportRows = null;
+    renderMenuImportPreview();
+    alertToast(err && err.message && /Excel|CSV/.test(err.message) ? err.message : "读不了这个文件,请确认是 .xlsx 或 CSV");
+  }
+}
+function confirmMenuImport(){
+  if(!menuImportPlan) return;
+  const { added, updated } = applyMenuImportPlan(menuImportPlan);
+  saveState();
+  renderMenuEditor();
+  renderComboListEditor();
+  renderItemGridIfNeeded();
+  hideModal("menuImportModal");
+  alertToast(`导入完成:新增 ${added} 项,更新价格 ${updated} 项`);
+}
+function downloadMenuTemplate(){
+  const csv = "分类,名称,价格\r\n主食,招牌炒饭,9.90\r\n主食,咖喱鸡饭,10.50\r\n饮料 Drinks,美禄 Milo,4.50\r\n饮料 Drinks,柠檬茶,3.80\r\n";
+  downloadBlob("﻿" + csv, "soos-kitchen-menu-template.csv", "text/csv;charset=utf-8");
+}
+
 // ---------- Modal helpers ----------
 // All .modal elements share the same z-index and are full-screen overlays, so when two are open
 // at once, plain DOM order decides which one is actually visible/clickable — not which one was
@@ -3343,6 +3640,17 @@ function init(){
   document.getElementById("btnRemoveOnlineOrderQr").onclick = removeOnlineOrderQrFile;
   document.getElementById("btnAddCategory").onclick = ()=> addCategory(false);
   document.getElementById("btnAddBeverageCategory").onclick = addBeverageCategory;
+  document.getElementById("btnImportMenu").onclick = openMenuImportModal;
+  document.getElementById("importFileInput").addEventListener("change", e=> handleMenuImportFile(e.target.files[0]));
+  document.getElementById("importPasteBox").addEventListener("input", e=>{
+    const t = e.target.value;
+    menuImportRows = t.trim() ? parseDelimited(t) : null;
+    renderMenuImportPreview();
+  });
+  document.getElementById("importTargetCat").onchange = renderMenuImportPreview;
+  document.getElementById("importNewCatName").addEventListener("input", renderMenuImportPreview);
+  document.getElementById("btnConfirmImport").onclick = confirmMenuImport;
+  document.getElementById("btnDownloadMenuTemplate").onclick = downloadMenuTemplate;
   document.getElementById("btnAddPromo").onclick = addPromo;
   document.getElementById("btnGenShopId").onclick = ()=>{ document.getElementById("cloudShopIdInput").value = genShopId(); };
   document.getElementById("btnCloudConnect").onclick = startCloudSync;
