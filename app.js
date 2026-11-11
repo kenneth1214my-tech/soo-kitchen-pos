@@ -1125,7 +1125,7 @@ async function manualPrint(kind){
   try{
     let ok;
     if(kind==="receipt"){
-      if(btPrinterChar) ok = await printReceiptBT(order);
+      if(await ensurePrinter()) ok = await printReceiptBT(order);
       else { window.print(); ok = true; }
     }else{
       ok = await printTicketKind(order, kind);
@@ -1143,13 +1143,15 @@ async function printMaster(){
   if(!order || printingNow) return;
   const { food, drinks } = orderTicketParts(order);
   const steps = [food.length ? "kitchen" : null, drinks.length ? "drink" : null, "receipt"].filter(Boolean);
-  if(!btPrinterChar){
+  printingNow = true; setPrintBusy(true);
+  const connected = await ensurePrinter();    // quietly reconnects a dropped printer first
+  if(!connected){
+    printingNow = false; setPrintBusy(false);
     alertToast("没有连接蓝牙打印机,只能打印收据(厨房单、饮料单需要先连接打印机)");
     window.print();
     printedMarks.add(printedKey(order, "receipt")); refreshPrintButtons();
     return;
   }
-  printingNow = true; setPrintBusy(true);
   const done = [], skipped = [];
   try{
     for(const kind of steps){
@@ -1170,10 +1172,11 @@ async function printMaster(){
 }
 // Optional (设置 → 结账后自动打印): the old behaviour, now as separate food and drink tickets.
 async function maybeAutoPrintTickets(order){
-  if(!(state.settings.autoPrintTickets && btPrinterChar) || printingNow) return;
+  if(!state.settings.autoPrintTickets || printingNow) return;
   const { food, drinks } = orderTicketParts(order);
   printingNow = true; setPrintBusy(true);
   try{
+    if(!(await ensurePrinter())) return;
     for(const kind of [food.length ? "kitchen" : null, drinks.length ? "drink" : null].filter(Boolean)){
       const ok = await printTicketKind(order, kind);
       if(ok===false) return;
@@ -2517,7 +2520,8 @@ async function connectToBluetoothDevice(device){
     device.addEventListener("gattserverdisconnected", ()=>{
       btPrinterChar = null;
       updatePrinterStatus();
-      alertToast("打印机已断开连接");
+      alertToast("打印机已断开连接,正在尝试自动重连…");
+      scheduleAutoReconnect();
     });
     btListenerAttachedDevices.add(device);
   }
@@ -2561,6 +2565,7 @@ async function checkForRememberedPrinter(){
     rememberedBtDevice = devices && devices.length ? devices[0] : null;
   }catch(e){ rememberedBtDevice = null; }
   updatePrinterStatus();
+  if(rememberedBtDevice) tryAutoReconnect();   // quiet attempt on page load; falls back to the manual button
 }
 
 async function reconnectRememberedPrinter(){
@@ -2572,6 +2577,48 @@ async function reconnectRememberedPrinter(){
     alertToast("重新连接失败: " + (err && err.message ? err.message : err));
   }
 }
+
+// ---- Keeping the printer connected ----
+// The browser holds the Bluetooth link (GATT connection) for us; the app itself has no idle timeout.
+// The link drops when the printer goes to sleep / is switched off / moves out of range, or when the
+// page is reloaded or the browser is closed. The OS-level pairing stays, so reconnecting to the same
+// printer needs no new pairing: we retry quietly after a drop, again whenever the page comes back to
+// the foreground, and right before any print that finds the printer disconnected.
+let btReconnecting = null;
+let btAutoRetryTimers = [];
+function btIsConnected(){
+  if(!btPrinterChar) return false;
+  // some Android WebViews never fire "gattserverdisconnected" — trust the live flag as well
+  if(btPrinterDevice && btPrinterDevice.gatt && btPrinterDevice.gatt.connected===false){ btPrinterChar = null; updatePrinterStatus(); return false; }
+  return true;
+}
+async function tryAutoReconnect(){
+  if(btIsConnected()) return true;
+  const dev = btPrinterDevice || rememberedBtDevice;
+  if(!dev || !navigator.bluetooth) return false;
+  if(btReconnecting) return btReconnecting;
+  btReconnecting = (async()=>{
+    try{ await connectToBluetoothDevice(dev); return true; }
+    catch(e){ return false; }
+    finally{ btReconnecting = null; }
+  })();
+  return btReconnecting;
+}
+// Used by every print entry point: true when a printer is (or just became) connected.
+async function ensurePrinter(){
+  return btIsConnected() || await tryAutoReconnect();
+}
+function scheduleAutoReconnect(){
+  btAutoRetryTimers.forEach(clearTimeout);
+  btAutoRetryTimers = [2000, 6000, 15000, 40000].map((ms, i, arr)=> setTimeout(async()=>{
+    if(btIsConnected()) return;
+    const ok = await tryAutoReconnect();
+    if(ok){ btAutoRetryTimers.forEach(clearTimeout); btAutoRetryTimers = []; alertToast("打印机已自动重新连接"); }
+  }, ms));
+}
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState==="visible" && !btIsConnected() && (btPrinterDevice || rememberedBtDevice)) tryAutoReconnect();
+});
 
 async function sendBytesToPrinter(bytes){
   if(!btPrinterChar) throw new Error("打印机未连接");
@@ -2750,8 +2797,8 @@ const ESC_INIT = new Uint8Array([0x1B,0x40]);
 const ESC_FEED_CUT = new Uint8Array([0x0A,0x0A,0x1D,0x56,0x00]);
 
 async function printBlocks(blocks){
-  if(!btPrinterChar){
-    alertToast("请先在设置里连接蓝牙打印机");
+  if(!(await ensurePrinter())){
+    alertToast("没有连接蓝牙打印机,请先在设置里连接(或打开打印机电源后再试)");
     return false;
   }
   try{
