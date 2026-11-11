@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202611132200">
+<link rel="manifest" href="manifest.json?v=202611132300">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202611132200">
-<link rel="icon" href="icon-192.png?v=202611132200">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611132300">
+<link rel="icon" href="icon-192.png?v=202611132300">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202611132200">
+<link rel="stylesheet" href="style.css?v=202611132300">
 </head>
 <body>
 
@@ -287,8 +287,10 @@
     <div class="modal-header"><span>✅ 订单完成</span><button class="close-btn" data-close="receiptModal">✕</button></div>
     <div id="receiptContent" class="receipt"></div>
     <div class="receipt-actions">
-      <button id="btnPrintReceipt" class="secondary-btn">🖨 打印收据</button>
+      <button id="btnPrintReceipt" class="secondary-btn">🧾 收据</button>
       <button id="btnPrintKitchen" class="secondary-btn">🍳 厨房单</button>
+      <button id="btnPrintDrink" class="secondary-btn">🥤 饮料单</button>
+      <button id="btnPrintMaster" class="print-master">🖨 Print Master<small>厨房单 + 饮料单 + 收据 一起打印</small></button>
       <button id="btnNewOrder" class="primary-btn">新订单</button>
     </div>
   </div>
@@ -416,7 +418,7 @@
           <option value="58">58mm (常见小型收据机)</option>
           <option value="80">80mm</option>
         </select>
-        <label class="checkbox-row"><input type="checkbox" id="inputAutoPrintKitchen"> 结账成功后自动打印厨房单</label>
+        <label class="checkbox-row"><input type="checkbox" id="inputAutoPrintTickets"> 结账成功后自动打印厨房单和饮料单(默认关闭:改为在「订单完成」画面手动按键打印)</label>
         <label class="checkbox-row"><input type="checkbox" id="inputSeparateDrinkTicket"> 饮料单独打印一张「饮料单」(食物和饮料分开两张)</label>
 
         <hr>
@@ -503,6 +505,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202611132200" defer></script>
+<script src="app.js?v=202611132300" defer></script>
 </body>
 </html>

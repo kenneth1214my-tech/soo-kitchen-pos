@@ -18,7 +18,7 @@ const DEFAULT_STATE = {
     discountPinRequired:false,
     deviceLabel:"",
     paperWidth:"58",
-    autoPrintKitchen:true,
+    autoPrintTickets:false,
     drinkOptions:"温度: 热,冷\n糖度: 正常,少糖,无糖\n冰量: 正常冰,少冰,去冰",
     drinkOptionsPrompt:true,
     separateDrinkTicket:true,
@@ -1060,15 +1060,129 @@ function finalizeOrderInner(paymentMethod, extra){
     state.nextOrderSeq++;
     saveStateLocalOnly();
     showReceipt(order, false);
-    maybeAutoPrintKitchen(order.orderNo, order.items, order.orderType, order.table);
+    maybeAutoPrintTickets(order);
     clearCart();
     closeMobileCart();
   }
 }
 
-function maybeAutoPrintKitchen(orderNo, items, type, table){
-  if(!(state.settings.autoPrintKitchen && btPrinterChar)) return;
-  printKitchenTickets({ orderNo, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items, orderType: type, table });
+// ---- Printing from the receipt window ----
+// Nothing prints by itself any more (unless 设置 → "结账后自动打印" is ticked): after 确认订单 the receipt
+// window offers 收据 / 厨房单 / 饮料单 one by one, plus Print Master which prints them all in turn.
+// printedMarks remembers what already came out so a second tap (or the 2nd/3rd guest of an equal split,
+// whose slips all carry the whole order) doesn't send the kitchen the same ticket twice.
+const printedMarks = new Set();
+let printingNow = false;
+const PRINT_NAMES = { receipt:"收据", kitchen:"厨房单", drink:"饮料单" };
+function printedKey(order, kind){
+  let no = String(order.orderNo);
+  if(kind!=="receipt" && order.isSplit && order.splitKind==="equal"){
+    const i = no.lastIndexOf("-");
+    if(i > 0) no = no.slice(0, i);
+  }
+  return no + ":" + kind;
+}
+function orderTicketParts(order){
+  const items = order.items || [];
+  return { food: items.filter(i=>!i.isBeverage), drinks: items.filter(i=>i.isBeverage) };
+}
+// kind: "kitchen" (food only) or "drink" (drinks only). Resolves false when there is nothing to print
+// or the printer failed.
+function printTicketKind(order, kind){
+  const { food, drinks } = orderTicketParts(order);
+  if(kind==="drink"){
+    return drinks.length ? printKitchenTicketBT(Object.assign({}, order, { items: drinks, ticketTitle:"饮料单" })) : Promise.resolve(false);
+  }
+  if(!food.length) return Promise.resolve(false);
+  return printKitchenTicketBT(Object.assign({}, order, { items: food, ticketTitle: drinks.length ? "厨房单" : undefined }));
+}
+function refreshPrintButtons(){
+  const order = currentReceiptOrder;
+  if(!order) return;
+  const { food, drinks } = orderTicketParts(order);
+  const set = (id, show, kind, label)=>{
+    const b = document.getElementById(id);
+    const done = printedMarks.has(printedKey(order, kind));
+    b.classList.toggle("hidden", !show);
+    b.classList.toggle("printed", done);
+    b.textContent = label + (done ? " ✓" : "");
+  };
+  set("btnPrintReceipt", true, "receipt", "🧾 收据");
+  set("btnPrintKitchen", food.length>0, "kitchen", "🍳 厨房单");
+  set("btnPrintDrink", drinks.length>0, "drink", "🥤 饮料单");
+  const parts = [food.length ? "厨房单" : null, drinks.length ? "饮料单" : null, "收据"].filter(Boolean).join(" + ");
+  document.getElementById("btnPrintMaster").innerHTML = `🖨 Print Master<small>${parts} 一起打印</small>`;
+}
+function setPrintBusy(busy){
+  ["btnPrintReceipt","btnPrintKitchen","btnPrintDrink","btnPrintMaster"].forEach(id=>{ document.getElementById(id).disabled = busy; });
+}
+async function manualPrint(kind){
+  const order = currentReceiptOrder;
+  if(!order || printingNow) return false;
+  const key = printedKey(order, kind);
+  if(printedMarks.has(key) && !confirm(`这张${PRINT_NAMES[kind]}已经打印过了,要再印一次吗?`)) return false;
+  printingNow = true; setPrintBusy(true);
+  try{
+    let ok;
+    if(kind==="receipt"){
+      if(btPrinterChar) ok = await printReceiptBT(order);
+      else { window.print(); ok = true; }
+    }else{
+      ok = await printTicketKind(order, kind);
+    }
+    if(ok!==false) printedMarks.add(key);
+    return ok!==false;
+  }finally{
+    printingNow = false; setPrintBusy(false); refreshPrintButtons();
+  }
+}
+// Print Master: kitchen ticket -> drink ticket -> receipt, one after the other. Tickets already
+// printed for this order are skipped (use their own button to reprint on purpose); stops at the first failure.
+async function printMaster(){
+  const order = currentReceiptOrder;
+  if(!order || printingNow) return;
+  const { food, drinks } = orderTicketParts(order);
+  const steps = [food.length ? "kitchen" : null, drinks.length ? "drink" : null, "receipt"].filter(Boolean);
+  if(!btPrinterChar){
+    alertToast("没有连接蓝牙打印机,只能打印收据(厨房单、饮料单需要先连接打印机)");
+    window.print();
+    printedMarks.add(printedKey(order, "receipt")); refreshPrintButtons();
+    return;
+  }
+  printingNow = true; setPrintBusy(true);
+  const done = [], skipped = [];
+  try{
+    for(const kind of steps){
+      const key = printedKey(order, kind);
+      if(kind!=="receipt" && printedMarks.has(key)){ skipped.push(PRINT_NAMES[kind]); continue; }
+      const ok = kind==="receipt" ? await printReceiptBT(order) : await printTicketKind(order, kind);
+      if(ok===false){
+        alertToast(`打印中断:${PRINT_NAMES[kind]}没有印出来` + (done.length ? `(已印: ${done.join("、")})` : ""));
+        return;
+      }
+      printedMarks.add(key); done.push(PRINT_NAMES[kind]);
+      await new Promise(r=>setTimeout(r, 400));   // let the printer finish one slip before the next
+    }
+    alertToast(`已打印: ${done.join("、")}` + (skipped.length ? `(略过已打印的: ${skipped.join("、")})` : ""));
+  }finally{
+    printingNow = false; setPrintBusy(false); refreshPrintButtons();
+  }
+}
+// Optional (设置 → 结账后自动打印): the old behaviour, now as separate food and drink tickets.
+async function maybeAutoPrintTickets(order){
+  if(!(state.settings.autoPrintTickets && btPrinterChar) || printingNow) return;
+  const { food, drinks } = orderTicketParts(order);
+  printingNow = true; setPrintBusy(true);
+  try{
+    for(const kind of [food.length ? "kitchen" : null, drinks.length ? "drink" : null].filter(Boolean)){
+      const ok = await printTicketKind(order, kind);
+      if(ok===false) return;
+      printedMarks.add(printedKey(order, kind));
+      await new Promise(r=>setTimeout(r, 400));
+    }
+  }finally{
+    printingNow = false; setPrintBusy(false); refreshPrintButtons();
+  }
 }
 
 function showReceipt(order, returnToSplitList){
@@ -1116,11 +1230,9 @@ function showReceipt(order, returnToSplitList){
   `;
   document.getElementById("btnNewOrder").dataset.returnSplit = returnToSplitList ? "1" : "";
   currentReceiptOrder = order;
-  // Equal-split receipts carry the WHOLE order's items (shown above for reference only, not this
-  // guest's share) — the kitchen ticket for that already printed once when the split was confirmed,
-  // so a "reprint" button here would resend the entire order's dishes to the kitchen every time any
-  // one guest's receipt is reopened. Only item-mode splits (this guest's actual dishes) make sense to reprint.
-  document.getElementById("btnPrintKitchen").classList.toggle("hidden", isEqualSplit);
+  // Equal-split receipts carry the WHOLE order's items, so every guest's slip offers the same kitchen /
+  // drink ticket; printedMarks (keyed by the base order number for equal splits) stops it going out twice.
+  refreshPrintButtons();
   showModal("receiptModal");
 }
 
@@ -1532,7 +1644,7 @@ function confirmSplitInner(){
 
   splitGroups = groups.map(g=>Object.assign({paid:false}, g));
   activeOrderNo = peekOrderNo();
-  maybeAutoPrintKitchen(activeOrderNo, cart.map(cartLineToOrderItem), orderType, orderType==="dinein" ? orderTable : null);
+  maybeAutoPrintTickets({ orderNo: activeOrderNo, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items: cart.map(cartLineToOrderItem), orderType, table: orderType==="dinein" ? orderTable : null });
   hideModal("splitModal");
   renderSplitPayList();
   showModal("splitPayModal");
@@ -1604,7 +1716,7 @@ function populateSettingsForm(){
   document.getElementById("inputDiscountPinRequired").checked = state.settings.discountPinRequired;
   document.getElementById("inputDeviceLabel").value = state.settings.deviceLabel || "";
   document.getElementById("inputPaperWidth").value = state.settings.paperWidth || "58";
-  document.getElementById("inputAutoPrintKitchen").checked = state.settings.autoPrintKitchen!==false;
+  document.getElementById("inputAutoPrintTickets").checked = !!state.settings.autoPrintTickets;
   document.getElementById("inputTableList").value = state.settings.tableList || "";
   document.getElementById("inputSeparateDrinkTicket").checked = state.settings.separateDrinkTicket!==false;
   document.getElementById("inputDrinkOptionsPrompt").checked = state.settings.drinkOptionsPrompt!==false;
@@ -1788,7 +1900,7 @@ function saveGeneralSettings(){
   state.settings.discountPinRequired = document.getElementById("inputDiscountPinRequired").checked;
   state.settings.deviceLabel = document.getElementById("inputDeviceLabel").value.trim();
   state.settings.paperWidth = document.getElementById("inputPaperWidth").value;
-  state.settings.autoPrintKitchen = document.getElementById("inputAutoPrintKitchen").checked;
+  state.settings.autoPrintTickets = document.getElementById("inputAutoPrintTickets").checked;
   state.settings.tableList = document.getElementById("inputTableList").value.trim();
   state.settings.separateDrinkTicket = document.getElementById("inputSeparateDrinkTicket").checked;
   state.settings.drinkOptionsPrompt = document.getElementById("inputDrinkOptionsPrompt").checked;
@@ -3830,14 +3942,10 @@ function init(){
       renderItemGrid();
     }
   };
-  document.getElementById("btnPrintReceipt").onclick = ()=>{
-    if(btPrinterChar && currentReceiptOrder){ printReceiptBT(currentReceiptOrder); }
-    else{ window.print(); }
-  };
-  document.getElementById("btnPrintKitchen").onclick = ()=>{
-    if(!currentReceiptOrder) return;
-    printKitchenTickets(currentReceiptOrder);
-  };
+  document.getElementById("btnPrintReceipt").onclick = ()=> manualPrint("receipt");
+  document.getElementById("btnPrintKitchen").onclick = ()=> manualPrint("kitchen");
+  document.getElementById("btnPrintDrink").onclick = ()=> manualPrint("drink");
+  document.getElementById("btnPrintMaster").onclick = printMaster;
   document.getElementById("btnPrintSettlement").onclick = showSettlement;
   document.getElementById("btnPrintSettlementDoc").onclick = ()=>{
     if(!currentSettlementSummary) return;

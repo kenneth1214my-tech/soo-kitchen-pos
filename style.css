@@ -347,6 +347,11 @@ input{font-family:inherit;}
 .receipt .r-online-qr div{font-size:12px;font-weight:700;text-align:center;}
 .receipt-actions{display:flex;gap:8px;padding:0 18px;flex-wrap:wrap;}
 .receipt-actions button{flex:1;min-width:90px;margin:0;font-size:13px;padding:14px 6px;}
+.receipt-actions button.printed{background:#dcfce7;border-color:#86efac;color:#166534;}
+.receipt-actions button:disabled{opacity:.5;}
+.receipt-actions .print-master{flex:1 1 100%;background:#1f2937;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:800;padding:12px 8px;}
+.receipt-actions .print-master small{display:block;font-size:11px;font-weight:600;opacity:.8;margin-top:2px;}
+.receipt-actions #btnNewOrder{flex:1 1 100%;}
 .select-input{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:15px;background:#fff;}
 
 /* History */
