@@ -429,6 +429,7 @@ function openDrinkOptionModal(item){
   drinkOptionGroups().forEach(g=>{
     const row = document.createElement("div");
     row.className = "opt-group";
+    row.dataset.group = g.name;
     row.innerHTML = `<div class="opt-group-name">${escapeHtml(g.name)}</div><div class="opt-choices"></div>`;
     const wrap = row.querySelector(".opt-choices");
     g.choices.map(c=>({ label:c.label, extra:choiceExtra(item, c) })).forEach((ch, ci, chs)=>{
@@ -442,6 +443,7 @@ function openDrinkOptionModal(item){
         // tapping the chosen one again clears it — a group is optional
         if(drinkOptionPick[g.name] && drinkOptionPick[g.name].label===ch.label) delete drinkOptionPick[g.name]; else drinkOptionPick[g.name] = ch;
         wrap.querySelectorAll(".opt-choice").forEach((x, i)=> x.classList.toggle("active", !!drinkOptionPick[g.name] && drinkOptionPick[g.name].label===chs[i].label));
+        syncDrinkOptionGroups();
         updateDrinkOptionTotal();
       };
       wrap.appendChild(b);
@@ -450,6 +452,22 @@ function openDrinkOptionModal(item){
   });
   updateDrinkOptionTotal();
   showModal("drinkOptionModal");
+}
+// A hot drink has no ice: once 热 is picked, any ice group (冰量 / Ice level ...) is hidden and its
+// pick cleared, so it can't end up on the ticket as "热 · 少冰". Un-picking 热 (or picking 冷) brings it back.
+const ICE_GROUP_RE = /冰|ice/i;
+function syncDrinkOptionGroups(){
+  const groups = drinkOptionGroups();
+  const hot = groups.some(g=>drinkOptionPick[g.name] && HOT_LABEL_RE.test(drinkOptionPick[g.name].label));
+  document.querySelectorAll("#drinkOptionGroups .opt-group").forEach(row=>{
+    const g = groups.find(x=>x.name===row.dataset.group);
+    const isIce = !!g && ICE_GROUP_RE.test(g.name) && !g.choices.some(c=>HOT_LABEL_RE.test(c.label));
+    row.classList.toggle("hidden", hot && isIce);
+    if(hot && isIce){
+      delete drinkOptionPick[g.name];
+      row.querySelectorAll(".opt-choice").forEach(x=>x.classList.remove("active"));
+    }
+  });
 }
 function drinkOptionExtra(){
   return round2(Object.values(drinkOptionPick).reduce((s,ch)=>s+(ch.extra||0),0));
