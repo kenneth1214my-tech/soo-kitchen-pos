@@ -130,6 +130,15 @@ function drinkOptionGroups(){
     return name && choices.length ? { name, choices } : null;
   }).filter(Boolean);
 }
+// Per-drink hot/cold pricing: item.price is the hot (or only) price, item.coldPrice (optional) is what
+// the same drink costs when the 冷 choice is picked. When set it replaces any global "冷+0.3" surcharge.
+const COLD_LABEL_RE = /^(冷|冷饮|冻|冷的|cold|iced?)$/i;
+const HOT_LABEL_RE = /^(热|热饮|热的|hot|warm)$/i;
+function hasColdPrice(item){ return item.coldPrice != null && item.coldPrice !== "" && isFinite(item.coldPrice); }
+function choiceExtra(item, ch){
+  if(hasColdPrice(item) && COLD_LABEL_RE.test(ch.label)) return round2(item.coldPrice - item.price);
+  return ch.extra || 0;
+}
 function itemDisplayName(it){ return it.name + (it.options ? ` (${it.options})` : ""); }
 // The one place a cart line becomes an order/receipt item, so options + beverage flag can't be
 // dropped by one of the several paths (full cart, equal split, reopen, ...) that build items.
@@ -286,7 +295,7 @@ function renderItemGrid(){
         <button class="item-quick-toggle" title="标记售罄/恢复">${toggleLabel}</button>
       </div>
       <div class="name">${escapeHtml(item.name)}</div>
-      <div class="price">${fmt(item.price)}</div>
+      <div class="price">${hasColdPrice(item) && isBeverageCategory(cat) ? `热 ${fmt(item.price)} · 冷 ${fmt(item.coldPrice)}` : fmt(item.price)}</div>
       ${combo ? `<div class="combo-contents">含: ${comboContents.map(c=>escapeHtml(c.name)+(c.qty>1?"x"+c.qty:"")).join("、")}</div>` : ""}
     `;
     if(item.available!==false){
@@ -392,14 +401,17 @@ function openDrinkOptionModal(item){
     row.className = "opt-group";
     row.innerHTML = `<div class="opt-group-name">${escapeHtml(g.name)}</div><div class="opt-choices"></div>`;
     const wrap = row.querySelector(".opt-choices");
-    g.choices.forEach(ch=>{
+    g.choices.map(c=>({ label:c.label, extra:choiceExtra(item, c) })).forEach((ch, ci, chs)=>{
       const b = document.createElement("button");
       b.className = "opt-choice";
-      b.innerHTML = escapeHtml(ch.label) + (ch.extra>0 ? `<small>+${fmt(ch.extra)}</small>` : "");
+      // a drink with its own cold price shows the actual price on 热 / 冷 instead of a "+"
+      const isCold = hasColdPrice(item) && COLD_LABEL_RE.test(ch.label), isHot = hasColdPrice(item) && HOT_LABEL_RE.test(ch.label);
+      const tag = isCold ? fmt(item.coldPrice) : isHot ? fmt(item.price) : (ch.extra>0 ? "+"+fmt(ch.extra) : "");
+      b.innerHTML = escapeHtml(ch.label) + (tag ? `<small>${tag}</small>` : "");
       b.onclick = ()=>{
         // tapping the chosen one again clears it — a group is optional
         if(drinkOptionPick[g.name] && drinkOptionPick[g.name].label===ch.label) delete drinkOptionPick[g.name]; else drinkOptionPick[g.name] = ch;
-        wrap.querySelectorAll(".opt-choice").forEach((x, i)=> x.classList.toggle("active", !!drinkOptionPick[g.name] && drinkOptionPick[g.name].label===g.choices[i].label));
+        wrap.querySelectorAll(".opt-choice").forEach((x, i)=> x.classList.toggle("active", !!drinkOptionPick[g.name] && drinkOptionPick[g.name].label===chs[i].label));
         updateDrinkOptionTotal();
       };
       wrap.appendChild(b);
@@ -2869,7 +2881,8 @@ function renderMenuEditor(){
           </div>
           <div class="ie-line2">
             <button class="avail-toggle" title="上架/售罄">${item.available===false?"🚫":"✅"}</button>
-            <input type="number" step="0.10" min="0" value="${item.price}" placeholder="价格">
+            ${isBeverageCategory(cat)?`<span class="ie-pair"><span class="ie-tag">热</span>`:""}<input type="number" step="0.10" min="0" value="${item.price}" placeholder="${isBeverageCategory(cat)?"热价":"价格"}" title="${isBeverageCategory(cat)?"热饮价格(没分冷热就是统一价)":"价格"}">${isBeverageCategory(cat)?`</span>`:""}
+            ${isBeverageCategory(cat)?`<span class="ie-pair"><span class="ie-tag cold">冷</span><input type="number" step="0.10" min="0" class="ie-cold-price" value="${hasColdPrice(item)?item.coldPrice:""}" placeholder="同热价" title="冷饮价格;留空 = 和热价一样"></span>`:""}
             <select class="ie-move-select" title="移到其他分类">
               <option value="">移到...</option>
               ${state.menu.filter(c=>c.id!==cat.id).map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}
@@ -2922,6 +2935,12 @@ function renderMenuEditor(){
         saveState(); renderMenuEditor(); renderItemGridIfNeeded();
       };
       nameInput.onchange = ()=>{ item.name = nameInput.value.trim()||item.name; saveState(); renderComboListEditor(); renderItemGridIfNeeded(); };
+      const coldInput = row.querySelector(".ie-cold-price");
+      if(coldInput) coldInput.onchange = ()=>{
+        if(coldInput.value.trim()===""){ delete item.coldPrice; }
+        else { item.coldPrice = Math.max(0, parseFloat(coldInput.value)||0); coldInput.value = item.coldPrice; }
+        saveState(); renderItemGridIfNeeded();
+      };
       priceInput.onchange = ()=>{ item.price = Math.max(0, parseFloat(priceInput.value)||0); priceInput.value = item.price; saveState(); renderItemGridIfNeeded(); };
       delBtn.onclick = ()=>{
         const usedInCombos = findCombosUsingItem(item.id);
@@ -3324,9 +3343,13 @@ function buildMenuImportPlan(rows, menu, defaultCatName){
   if(first < 0) return { entries, errors:[{ line:0, reason:"没有读到任何内容" }], hasCatColumn:false };
   const head = rows[first];
   const idxOf = re=>head.findIndex(c=>re.test(c));
-  let colCat = idxOf(/分类|类别|category/i), colName = idxOf(/名称|品名|菜名|菜品|商品|产品|name|item|product/i), colPrice = idxOf(/价格|价钱|单价|售价|price/i);
+  // an optional 冷价 / Cold column gives a drink its own cold price (see hasColdPrice); it must be
+  // picked out first so "冷饮价格" is not mistaken for the main price column
+  const colCold = idxOf(/冷|cold|iced/i);
+  let colCat = idxOf(/分类|类别|category/i), colName = idxOf(/名称|品名|菜名|菜品|商品|产品|name|item|product/i);
+  let colPrice = head.findIndex((c, i)=>i !== colCold && /价格|价钱|单价|售价|热价|price|hot/i.test(c));
   let start = first + 1;
-  if(colName < 0 && colPrice < 0 && colCat < 0){
+  if(colName < 0 && colPrice < 0 && colCat < 0 && colCold < 0){
     // no header row
     start = first;
     const width = Math.max(...rows.map(r=>r.length));
@@ -3344,10 +3367,16 @@ function buildMenuImportPlan(rows, menu, defaultCatName){
     if(priceRaw === ""){ errors.push({ line, name, reason:"没有价格" }); continue; }
     const price = /^\d+(\.\d+)?$/.test(priceRaw) ? round2(parseFloat(priceRaw)) : NaN;
     if(!isFinite(price)){ errors.push({ line, name, reason:"价格「" + r[colPrice] + "」看不懂" }); continue; }
+    let cold = null;
+    if(colCold >= 0 && r[colCold] !== undefined && r[colCold] !== ""){
+      const cr = r[colCold].replace(/rm|\$|,|\s/gi, "");
+      if(!/^\d+(\.\d+)?$/.test(cr)){ errors.push({ line, name, reason:"冷价「" + r[colCold] + "」看不懂" }); continue; }
+      cold = round2(parseFloat(cr));
+    }
     const cat = (colCat >= 0 && r[colCat]) || defaultCatName || "新分类";
     const key = cat.toLowerCase() + "\u0001" + name.toLowerCase();
-    if(seen.has(key)){ seen.get(key).price = price; continue; } // same dish listed twice: last one wins
-    const entry = { cat, name, price, action:"add", oldPrice:null, newCat:true };
+    if(seen.has(key)){ const e0 = seen.get(key); e0.price = price; if(cold !== null) e0.coldPrice = cold; continue; } // same dish listed twice: last one wins
+    const entry = { cat, name, price, coldPrice:cold, action:"add", oldPrice:null, oldCold:null, newCat:true };
     seen.set(key, entry); entries.push(entry);
   }
   entries.forEach(e=>{
@@ -3356,7 +3385,11 @@ function buildMenuImportPlan(rows, menu, defaultCatName){
     e.newCat = false;
     e.cat = mc.name;
     const it = mc.items.find(i=>!isCombo(i) && (i.name||"").trim().toLowerCase() === e.name.toLowerCase());
-    if(it){ e.oldPrice = it.price; e.action = it.price === e.price ? "same" : "update"; }
+    if(it){
+      e.oldPrice = it.price; e.oldCold = hasColdPrice(it) ? it.coldPrice : null;
+      const coldChanged = e.coldPrice !== null && e.coldPrice !== e.oldCold;
+      e.action = (it.price === e.price && !coldChanged) ? "same" : "update";
+    }
   });
   return { entries, errors, hasCatColumn:colCat >= 0 };
 }
@@ -3367,8 +3400,18 @@ function applyMenuImportPlan(plan){
     let cat = findImportCategory(state.menu, e.cat);
     if(!cat){ cat = { id:uid(), name:e.cat, items:[] }; state.menu.push(cat); }
     const it = cat.items.find(i=>!isCombo(i) && (i.name||"").trim().toLowerCase() === e.name.toLowerCase());
-    if(it){ if(it.price !== e.price){ it.price = e.price; updated++; } }
-    else { cat.items.push({ id:uid(), name:e.name, price:e.price, available:true, image:"" }); added++; }
+    if(it){
+      let changed = false;
+      if(it.price !== e.price){ it.price = e.price; changed = true; }
+      // a blank 冷价 cell leaves the existing cold price alone
+      if(e.coldPrice !== null && e.coldPrice !== undefined && (!hasColdPrice(it) || it.coldPrice !== e.coldPrice)){ it.coldPrice = e.coldPrice; changed = true; }
+      if(changed) updated++;
+    }
+    else {
+      const ni = { id:uid(), name:e.name, price:e.price, available:true, image:"" };
+      if(e.coldPrice !== null && e.coldPrice !== undefined) ni.coldPrice = e.coldPrice;
+      cat.items.push(ni); added++;
+    }
   });
   if(!activeCategory && state.menu.length) activeCategory = state.menu[0].id;
   return { added, updated };
@@ -3404,7 +3447,8 @@ function renderMenuImportPreview(){
   const LIMIT = 300;
   let html = `<div class="imp-summary">新增 <b>${n.add}</b> 项 · 更新价格 <b>${n.update}</b> 项 · 价格没变 ${n.same} 项` + (plan.errors.length ? ` · <span class="imp-err-count">跳过 ${plan.errors.length} 行</span>` : "") + `</div>`;
   html += `<div class="imp-list">` + plan.entries.slice(0, LIMIT).map(e=>{
-    const price = e.action === "update" ? `${fmt(e.oldPrice)} → <b>${fmt(e.price)}</b>` : fmt(e.price);
+    let price = e.action === "update" && e.oldPrice !== e.price ? `${fmt(e.oldPrice)} → <b>${fmt(e.price)}</b>` : fmt(e.price);
+    if(e.coldPrice !== null && e.coldPrice !== undefined) price = `热 ${price} · 冷 ` + (e.oldCold !== null && e.oldCold !== e.coldPrice ? `${fmt(e.oldCold)} → <b>${fmt(e.coldPrice)}</b>` : fmt(e.coldPrice));
     return `<div class="imp-row"><span class="imp-tag ${tag[e.action][1]}">${tag[e.action][0]}</span><span class="imp-cat">${escapeHtml(e.cat)}${e.newCat ? " (新分类)" : ""}</span><span class="imp-name">${escapeHtml(e.name)}</span><span class="imp-price">${price}</span></div>`;
   }).join("") + (plan.entries.length > LIMIT ? `<div class="imp-more">…还有 ${plan.entries.length - LIMIT} 项没显示(导入时会全部处理)</div>` : "") + `</div>`;
   if(plan.errors.length){
@@ -3449,7 +3493,7 @@ function confirmMenuImport(){
   alertToast(`导入完成:新增 ${added} 项,更新价格 ${updated} 项`);
 }
 function downloadMenuTemplate(){
-  const csv = "分类,名称,价格\r\n主食,招牌炒饭,9.90\r\n主食,咖喱鸡饭,10.50\r\n饮料 Drinks,美禄 Milo,4.50\r\n饮料 Drinks,柠檬茶,3.80\r\n";
+  const csv = "分类,名称,价格,冷价\r\n主食,招牌炒饭,9.90,\r\n主食,咖喱鸡饭,10.50,\r\n饮料 Drinks,美禄 Milo,4.50,5.00\r\n饮料 Drinks,柠檬茶,3.80,4.30\r\n";
   downloadBlob("﻿" + csv, "soos-kitchen-menu-template.csv", "text/csv;charset=utf-8");
 }
 

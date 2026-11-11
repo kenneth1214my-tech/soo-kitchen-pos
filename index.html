@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202611131500">
+<link rel="manifest" href="manifest.json?v=202611131850">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202611131500">
-<link rel="icon" href="icon-192.png?v=202611131500">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611131850">
+<link rel="icon" href="icon-192.png?v=202611131850">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202611131500">
+<link rel="stylesheet" href="style.css?v=202611131850">
 </head>
 <body>
 
@@ -237,7 +237,7 @@
   <div class="modal-box wide">
     <div class="modal-header"><span>📥 从 Excel 导入菜单 / 饮料</span><button class="close-btn" data-close="menuImportModal">✕</button></div>
     <div class="imp-body">
-      <p class="hint" style="text-align:left;margin:0 0 8px;">Excel 里放 3 栏:<b>分类 / 名称 / 价格</b>(第一行写栏位名称)。同一分类里已有的同名菜品只会更新价格,不会重复新增。饮料就把分类写成「饮料 Drinks」。</p>
+      <p class="hint" style="text-align:left;margin:0 0 8px;">Excel 里放这几栏:<b>分类 / 名称 / 价格</b>(第一行写栏位名称)。饮料想分冷热价,再加一栏<b>冷价</b>(价格 = 热价,冷价留空 = 冷热同价)。同一分类里已有的同名菜品只会更新价格,不会重复新增。饮料就把分类写成「饮料 Drinks」。</p>
       <button id="btnDownloadMenuTemplate" class="secondary-btn">⬇ 下载范本(CSV,可用 Excel 打开)</button>
       <label class="imp-label">① 选择 Excel (.xlsx) 或 CSV 文件</label>
       <input type="file" id="importFileInput" accept=".xlsx,.xlsm,.csv,.txt,.tsv,text/csv">
@@ -360,8 +360,8 @@
         <label>桌号列表 (堂食用,用逗号分隔,留空则不显示选桌)</label>
         <input type="text" id="inputTableList" placeholder="例如：1,2,3,4,5,6,A1,A2">
         <label class="checkbox-row"><input type="checkbox" id="inputDrinkOptionsPrompt"> 点饮料时弹出选项 (热/冷、糖度、冰量)</label>
-        <label>饮料选项 (每行一组,格式「组名: 选项1,选项2」。要加价就在选项后面写 +金额,例如「温度: 热,冷+0.5」表示冷的加 RM0.50)</label>
-        <textarea id="inputDrinkOptions" rows="4" placeholder="温度: 热,冷+0.5&#10;糖度: 正常,少糖,无糖&#10;冰量: 正常冰,少冰,去冰"></textarea>
+        <label>饮料选项 (每行一组,格式「组名: 选项1,选项2」。热/冷价格不同:到「菜单」里每个饮料的「热价 / 冷价」两格分别填。其他选项要加价才在后面写 +金额,例如「加料: 珍珠+1.50」)</label>
+        <textarea id="inputDrinkOptions" rows="4" placeholder="温度: 热,冷&#10;糖度: 正常,少糖,无糖&#10;冰量: 正常冰,少冰,去冰"></textarea>
         <label>新订单默认类型</label>
         <select id="inputDefaultOrderType" class="select-input">
           <option value="dinein">堂食 Dine In</option>
@@ -492,6 +492,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202611131500" defer></script>
+<script src="app.js?v=202611131850" defer></script>
 </body>
 </html>
