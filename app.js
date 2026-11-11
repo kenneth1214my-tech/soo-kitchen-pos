@@ -3119,13 +3119,26 @@ function renderItemGridIfNeeded(){
   renderItemGrid();
 }
 
-function addCategory(){
-  const cat = { id:uid(), name:"新分类", items:[] };
+function addCategory(beverage){
+  const cat = beverage
+    ? { id:uid(), name:"饮料 Drinks", beverage:true, items:[] }
+    : { id:uid(), name:"新分类", items:[] };
   state.menu.push(cat);
   if(!activeCategory) activeCategory = cat.id;
   saveState();
   renderMenuEditor();
   renderCategoryTabs();
+  // bring the new category into view — on a long menu it lands at the very bottom of the list
+  const boxes = document.querySelectorAll("#categoryEditorList .cat-editor");
+  if(boxes.length) boxes[boxes.length-1].scrollIntoView({ block:"center" });
+}
+function addBeverageCategory(){
+  if(state.menu.some(isBeverageCategory)){
+    alertToast("已经有饮料分类了,直接在里面新增菜品就可以");
+    return;
+  }
+  addCategory(true);
+  alertToast("已新增「饮料 Drinks」分类,请按「+ 新增菜品」加入你的饮料和价格");
 }
 
 // ---------- Modal helpers ----------
@@ -3313,7 +3326,8 @@ function init(){
   document.getElementById("btnRemoveQr").onclick = removeQrFile;
   document.getElementById("inputOnlineOrderQrFile").addEventListener("change", handleOnlineOrderQrFile);
   document.getElementById("btnRemoveOnlineOrderQr").onclick = removeOnlineOrderQrFile;
-  document.getElementById("btnAddCategory").onclick = addCategory;
+  document.getElementById("btnAddCategory").onclick = ()=> addCategory(false);
+  document.getElementById("btnAddBeverageCategory").onclick = addBeverageCategory;
   document.getElementById("btnAddPromo").onclick = addPromo;
   document.getElementById("btnGenShopId").onclick = ()=>{ document.getElementById("cloudShopIdInput").value = genShopId(); };
   document.getElementById("btnCloudConnect").onclick = startCloudSync;

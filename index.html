@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202611121100">
+<link rel="manifest" href="manifest.json?v=202611131000">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202611121100">
-<link rel="icon" href="icon-192.png?v=202611121100">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611131000">
+<link rel="icon" href="icon-192.png?v=202611131000">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202611121100">
+<link rel="stylesheet" href="style.css?v=202611131000">
 </head>
 <body>
 
@@ -424,6 +424,7 @@
         <p id="sampleMenuWarning" class="hint hidden" style="text-align:left;color:var(--danger);">⚠️ 目前的菜单还是系统内建的示范菜单(招牌炒饭/咖喱鸡饭等),不是你店里真正卖的东西——正式营业前记得改成你自己的菜单。</p>
         <div class="menu-editor-actions">
           <button id="btnAddCategory" class="secondary-btn">+ 新增分类</button>
+          <button id="btnAddBeverageCategory" class="secondary-btn">🥤 新增饮料分类</button>
         </div>
         <div id="categoryEditorList"></div>
       </div>
@@ -469,6 +470,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202611121100" defer></script>
+<script src="app.js?v=202611131000" defer></script>
 </body>
 </html>
