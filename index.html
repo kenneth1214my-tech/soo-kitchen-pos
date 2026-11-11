@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202611132100">
+<link rel="manifest" href="manifest.json?v=202611132200">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202611132100">
-<link rel="icon" href="icon-192.png?v=202611132100">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611132200">
+<link rel="icon" href="icon-192.png?v=202611132200">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202611132100">
+<link rel="stylesheet" href="style.css?v=202611132200">
 </head>
 <body>
 
@@ -78,6 +78,7 @@
       <div class="row discount-row hidden" id="rowDiscount"><span>折扣 <button id="btnRemoveDiscount" class="mini-x">✕</button></span><span id="discountVal">-RM0.00</span></div>
       <div class="row" id="rowDiscountAdd"><span></span><button id="btnAddDiscount" class="link-btn">+ 熟客折扣</button></div>
       <div class="row" id="rowTax" style="display:none"><span id="taxLabel">服务税</span><span id="taxVal">RM0.00</span></div>
+      <div class="row" id="rowRounding" style="display:none"><span>凑整</span><span id="roundingVal">RM0.00</span></div>
       <div class="row total"><span>总计</span><span id="totalVal">RM0.00</span></div>
     </div>
     <button id="btnCheckout" class="primary-btn" disabled>结账 Checkout</button>
@@ -112,6 +113,7 @@
 
     <div id="payQr" class="pay-panel hidden">
       <div class="due-amount">应付 <span id="dueAmountQr">RM0.00</span></div>
+      <p id="qrRoundingNote" class="hint hidden"></p>
       <img id="qrImage" src="" alt="DuitNow QR" class="qr-image">
       <p id="qrHint" class="hint">出示二维码给顾客扫描付款</p>
       <button id="btnConfirmQr" class="primary-btn">确认已收到付款</button>
@@ -372,6 +374,14 @@
         <label>税率 (%)</label>
         <input type="number" id="inputTaxRate" min="0" max="100" step="0.1">
 
+        <label>金额凑整 (折扣、税之后)</label>
+        <select id="inputRoundingUnit" class="select-input">
+          <option value="10">凑到 10 分(尾数 1–4 分舍去,5–9 分进位,例:0.74→0.70,0.75→0.80)</option>
+          <option value="5">凑到 5 分(马来西亚现金标准)</option>
+          <option value="0">不凑整(按实际金额)</option>
+        </select>
+        <label class="checkbox-row"><input type="checkbox" id="inputRoundingCashOnly"> 只对现金凑整(扫码付款按实际金额)</label>
+
         <label>DuitNow / 电子钱包 收款二维码</label>
         <input type="file" id="inputQrFile" accept="image/*">
         <img id="qrPreview" class="qr-preview hidden">
@@ -493,6 +503,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202611132100" defer></script>
+<script src="app.js?v=202611132200" defer></script>
 </body>
 </html>

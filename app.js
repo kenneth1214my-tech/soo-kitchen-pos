@@ -24,7 +24,9 @@ const DEFAULT_STATE = {
     separateDrinkTicket:true,
     tableList:"1,2,3,4,5,6,7,8,9,10",
     defaultOrderType:"dinein",
-    promotions:[]
+    promotions:[],
+    roundingUnit:10,
+    roundingCashOnly:false
   },
   menu:[
     { id:"cat1", name:"主食 Mains", items:[
@@ -199,7 +201,26 @@ function orderTypeLabel(type, table){
 
 function fmt(n){ return "RM" + (Math.round((n||0)*100)/100).toFixed(2); }
 function round2(n){ return Math.round(n*100)/100; }
-function roundToNickel(n){ return Math.round(n*20)/20; }
+// Bill rounding, in whole sen so floating point can't tip a .x5 the wrong way:
+//   unit 10 (default): last sen digit 1-4 rounds down to 0, 5-9 rounds up to the next 10 sen (0.74 -> 0.70, 0.75 -> 0.80)
+//   unit 5: nearest 5 sen (Malaysian cash rounding);  unit 0: no rounding.
+function roundToUnit(n, unitSen){
+  if(!(unitSen > 0)) return round2(n);
+  const cents = Math.round(n*100);
+  return Math.floor((2*cents + unitSen) / (2*unitSen)) * unitSen / 100;
+}
+function roundingUnit(){
+  const u = parseInt(state.settings.roundingUnit, 10);
+  return u===0 || u===5 || u===10 ? u : 10;
+}
+// What the customer actually pays for a bill total. method: "cash" or anything else (QR / cart display).
+// With "只对现金凑整" ticked, non-cash bills keep the exact amount.
+function payableFor(total, method){
+  const u = roundingUnit();
+  if(!u || (state.settings.roundingCashOnly && method!=="cash")) return round2(total);
+  return roundToUnit(total, u);
+}
+function roundingLabel(){ return roundingUnit()===5 ? "5分" : "10分"; }
 function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 
 function ensureOrderSeq(){
@@ -592,7 +613,15 @@ function renderCart(){
   }else{
     rowTax.style.display = "none";
   }
-  document.getElementById("totalVal").textContent = fmt(cartTotal());
+  const rowRounding = document.getElementById("rowRounding");
+  const cartAdj = round2(payableFor(cartTotal(), "qr") - cartTotal());
+  if(cartAdj !== 0){
+    rowRounding.style.display = "flex";
+    document.getElementById("roundingVal").textContent = (cartAdj>0 ? "+" : "-") + fmt(Math.abs(cartAdj));
+  }else{
+    rowRounding.style.display = "none";
+  }
+  document.getElementById("totalVal").textContent = fmt(payableFor(cartTotal(), "qr"));
   document.getElementById("orderNoLabel").textContent = activeOrderNo || peekOrderNo();
 
   const hasItems = cart.length>0;
@@ -601,7 +630,7 @@ function renderCart(){
   document.getElementById("btnUndoFab").classList.toggle("hidden", cartUndoStack.length===0);
   document.getElementById("btnSplitBill").disabled = !hasItems;
   document.getElementById("cartFabCount").textContent = cartCount();
-  document.getElementById("cartFabTotal").textContent = fmt(cartTotal());
+  document.getElementById("cartFabTotal").textContent = fmt(payableFor(cartTotal(), "qr"));
 }
 
 // ---------- Dine-in / take-away + table ----------
@@ -809,7 +838,7 @@ function updateDiscountPreview(){
   amt = Math.min(Math.max(amt,0), sub);
   const discSub = sub - amt;
   const tax = state.settings.taxEnabled ? discSub*state.settings.taxRate/100 : 0;
-  document.getElementById("discountPreviewTotal").textContent = fmt(discSub+tax);
+  document.getElementById("discountPreviewTotal").textContent = fmt(payableFor(discSub+tax, "qr"));
 }
 
 function applyDiscount(){
@@ -889,16 +918,19 @@ function openCheckout(ctx){
   if(!ctx && blockIfSplitInProgress()) return;
   if(activeOrderNo===null) activeOrderNo = peekOrderNo();
   checkoutCtx = ctx || buildFullCartCtx();
-  checkoutCtx.cashDue = roundToNickel(checkoutCtx.total);
+  checkoutCtx.cashDue = payableFor(checkoutCtx.total, "cash");
+  checkoutCtx.qrDue = payableFor(checkoutCtx.total, "qr");
   document.getElementById("dueAmount").textContent = fmt(checkoutCtx.cashDue);
-  document.getElementById("dueAmountQr").textContent = fmt(checkoutCtx.total);
-  const roundNote = document.getElementById("cashRoundingNote");
-  if(Math.abs(checkoutCtx.cashDue - checkoutCtx.total) >= 0.001){
-    roundNote.textContent = `现金四舍五入至最近5分 (原价 ${fmt(checkoutCtx.total)})`;
-    roundNote.classList.remove("hidden");
-  }else{
-    roundNote.classList.add("hidden");
-  }
+  document.getElementById("dueAmountQr").textContent = fmt(checkoutCtx.qrDue);
+  [["cashRoundingNote", checkoutCtx.cashDue], ["qrRoundingNote", checkoutCtx.qrDue]].forEach(([id, due])=>{
+    const note = document.getElementById(id);
+    if(Math.abs(due - checkoutCtx.total) >= 0.001){
+      note.textContent = `已凑整至最近${roundingLabel()} (原价 ${fmt(checkoutCtx.total)})`;
+      note.classList.remove("hidden");
+    }else{
+      note.classList.add("hidden");
+    }
+  });
   document.getElementById("cashReceived").value = "";
   document.getElementById("changeVal").textContent = fmt(0);
   document.getElementById("btnConfirmCash").disabled = true;
@@ -986,7 +1018,7 @@ function finalizeOrder(paymentMethod, extra){
 function finalizeOrderInner(paymentMethod, extra){
   const ctx = checkoutCtx;
   const orderNo = activeOrderNo + (ctx.label ? "-"+ctx.label : "");
-  const finalTotal = paymentMethod==="cash" ? ctx.cashDue : ctx.total;
+  const finalTotal = paymentMethod==="cash" ? ctx.cashDue : ctx.qrDue;
   const order = {
     orderNo,
     date: todayStr(),
@@ -998,7 +1030,7 @@ function finalizeOrderInner(paymentMethod, extra){
     tax: ctx.tax,
     taxRate: ctx.taxRate,
     total: finalTotal,
-    roundingAdj: paymentMethod==="cash" ? round2(finalTotal - ctx.total) : 0,
+    roundingAdj: round2(finalTotal - ctx.total),
     paymentMethod,
     cashReceived: extra && extra.cashReceived,
     change: extra && extra.change,
@@ -1067,7 +1099,7 @@ function showReceipt(order, returnToSplitList){
     <div class="r-line"><span>${isEqualSplit ? "本账单应付 (均分)" : "小计"}</span><span>${fmt(order.subtotal)}</span></div>
     ${order.discount>0?`<div class="r-line"><span>折扣${order.discountName?` (${escapeHtml(order.discountName)})`:""}</span><span>-${fmt(order.discount)}</span></div>`:""}
     ${order.tax>0?`<div class="r-line"><span>服务税 (${order.taxRate}%)</span><span>${fmt(order.tax)}</span></div>`:""}
-    ${order.roundingAdj?`<div class="r-line"><span>现金四舍五入</span><span>${order.roundingAdj>0?"+"+fmt(order.roundingAdj):"-"+fmt(Math.abs(order.roundingAdj))}</span></div>`:""}
+    ${order.roundingAdj?`<div class="r-line"><span>四舍五入</span><span>${order.roundingAdj>0?"+"+fmt(order.roundingAdj):"-"+fmt(Math.abs(order.roundingAdj))}</span></div>`:""}
     <div class="r-line r-total"><span>总计</span><span>${fmt(order.total)}</span></div>
     <div class="r-line"><span>付款方式</span><span>${order.paymentMethod==="cash"?"现金":"DuitNow / 电子钱包"}</span></div>
     ${order.paymentMethod==="cash"?`
@@ -1567,6 +1599,8 @@ function populateSettingsForm(){
   document.getElementById("inputReceiptFooter").value = state.settings.receiptFooterText || "";
   document.getElementById("inputTaxEnabled").checked = state.settings.taxEnabled;
   document.getElementById("inputTaxRate").value = state.settings.taxRate;
+  document.getElementById("inputRoundingUnit").value = String(roundingUnit());
+  document.getElementById("inputRoundingCashOnly").checked = !!state.settings.roundingCashOnly;
   document.getElementById("inputDiscountPinRequired").checked = state.settings.discountPinRequired;
   document.getElementById("inputDeviceLabel").value = state.settings.deviceLabel || "";
   document.getElementById("inputPaperWidth").value = state.settings.paperWidth || "58";
@@ -1749,6 +1783,8 @@ function saveGeneralSettings(){
   state.settings.receiptFooterText = document.getElementById("inputReceiptFooter").value.trim();
   state.settings.taxEnabled = document.getElementById("inputTaxEnabled").checked;
   state.settings.taxRate = parseFloat(document.getElementById("inputTaxRate").value) || 0;
+  state.settings.roundingUnit = parseInt(document.getElementById("inputRoundingUnit").value, 10);
+  state.settings.roundingCashOnly = document.getElementById("inputRoundingCashOnly").checked;
   state.settings.discountPinRequired = document.getElementById("inputDiscountPinRequired").checked;
   state.settings.deviceLabel = document.getElementById("inputDeviceLabel").value.trim();
   state.settings.paperWidth = document.getElementById("inputPaperWidth").value;
@@ -2248,7 +2284,7 @@ function exportHistoryCsv(){
   const end = document.getElementById("csvEndDate").value || todayStr();
   const filtered = history.filter(o=> o.date>=start && o.date<=end);
   if(filtered.length===0){ alertToast("这段范围内没有订单记录"); return; }
-  const rows = [["订单号","日期","时间","付款方式","小计","折扣","服务税","现金四舍五入","总计","是否分单","是否作废","类型","桌号"]];
+  const rows = [["订单号","日期","时间","付款方式","小计","折扣","服务税","四舍五入","总计","是否分单","是否作废","类型","桌号"]];
   filtered.forEach(o=> rows.push([
     o.orderNo, o.date, o.time, o.paymentMethod==="cash"?"现金":"电子钱包",
     o.subtotal, o.discount||0, o.tax||0, o.roundingAdj||0, o.total,
