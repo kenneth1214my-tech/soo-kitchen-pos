@@ -19,6 +19,9 @@ const DEFAULT_STATE = {
     deviceLabel:"",
     paperWidth:"58",
     autoPrintKitchen:true,
+    drinkOptions:"温度: 热,冷\n糖度: 正常,少糖,无糖\n冰量: 正常冰,少冰,去冰",
+    drinkOptionsPrompt:true,
+    separateDrinkTicket:true,
     tableList:"1,2,3,4,5,6,7,8,9,10",
     defaultOrderType:"dinein",
     promotions:[]
@@ -29,7 +32,7 @@ const DEFAULT_STATE = {
       { id:"i2", name:"咖喱鸡饭", price:11.50, available:true, image:"" },
       { id:"i3", name:"叉烧饭", price:10.00, available:true, image:"" }
     ]},
-    { id:"cat2", name:"饮料 Drinks", items:[
+    { id:"cat2", name:"饮料 Drinks", beverage:true, items:[
       { id:"i4", name:"美禄冰", price:4.50, available:true, image:"" },
       { id:"i5", name:"拉茶", price:3.50, available:true, image:"" },
       { id:"i6", name:"矿泉水", price:2.00, available:true, image:"" }
@@ -102,6 +105,48 @@ function tableOptions(){
   const seen = new Set();
   return (state.settings.tableList||"").split(/[,，、;；\s]+/).map(t=>t.trim()).filter(t=>t && !seen.has(t) && seen.add(t));
 }
+// ---- Beverages ----
+// A category counts as a beverage category when it's been explicitly ticked in the menu editor; until
+// then (e.g. menus saved before this feature existed) it's inferred from its name, so an existing
+// "饮料 Drinks" category works immediately with no setup.
+function isBeverageCategory(cat){
+  if(cat.beverage!==undefined) return !!cat.beverage;
+  return /饮料|饮品|drink|beverage/i.test(cat.name||"");
+}
+function findCategoryOfItem(itemId){
+  return state.menu.find(c=>c.items.some(i=>i.id===itemId)) || null;
+}
+// Settings text, one group per line: "温度: 热,冷" -> {name:"温度", choices:["热","冷"]}
+function drinkOptionGroups(){
+  return (state.settings.drinkOptions||"").split("\n").map(line=>{
+    const parts = line.split(/[:：]/);
+    if(parts.length<2) return null;
+    const name = parts[0].trim();
+    const choices = parts.slice(1).join(":").split(/[,，、]/).map(x=>x.trim()).filter(Boolean);
+    return name && choices.length ? { name, choices } : null;
+  }).filter(Boolean);
+}
+function itemDisplayName(it){ return it.name + (it.options ? ` (${it.options})` : ""); }
+// The one place a cart line becomes an order/receipt item, so options + beverage flag can't be
+// dropped by one of the several paths (full cart, equal split, reopen, ...) that build items.
+function cartLineToOrderItem(c){
+  return { name:c.name, price:c.price, qty:c.qty, note:c.note||"", comboContents:c.comboContents||[], options:c.options||"", isBeverage:!!c.isBeverage };
+}
+// Equal-split bills each carry the WHOLE order's items (see showReceipt), so summing items over all
+// of them would count every dish once per guest. Keep only the first bill of each equal-split group.
+function ordersForItemStats(orders){
+  const seen = new Set();
+  return orders.filter(o=>{
+    if(o.isSplit && o.splitKind==="equal"){
+      const i = String(o.orderNo).lastIndexOf("-");
+      const key = o.date + "|" + (i>0 ? String(o.orderNo).slice(0,i) : o.orderNo);
+      if(seen.has(key)) return false;
+      seen.add(key);
+    }
+    return true;
+  });
+}
+
 // "" for orders recorded before this feature existed (no orderType field) — callers just skip the line.
 function orderTypeLabel(type, table){
   if(type==="takeaway") return "外带";
@@ -241,7 +286,7 @@ function renderItemGrid(){
       ${combo ? `<div class="combo-contents">含: ${comboContents.map(c=>escapeHtml(c.name)+(c.qty>1?"x"+c.qty:"")).join("、")}</div>` : ""}
     `;
     if(item.available!==false){
-      card.onclick = ()=> addToCart(item);
+      card.onclick = ()=> onItemTap(item);
     }
     card.querySelector(".item-quick-toggle").onclick = (e)=>{
       e.stopPropagation();
@@ -304,13 +349,66 @@ function undoCart(){
   alertToast("已撤销上一步");
 }
 
-function addToCart(item){
+function addToCart(item, options){
   if(blockIfSplitInProgress()) return;
   snapshotCart();
-  const existing = cart.find(c=>c.itemId===item.id);
+  options = options || "";
+  // Same dish with different options (热 vs 冷) must be separate cart lines, so the options are part
+  // of the line key. Every cart/split helper treats itemId as an opaque key, so a suffix is safe.
+  const key = options ? item.id + "#" + options : item.id;
+  const existing = cart.find(c=>c.itemId===key);
   if(existing){ existing.qty++; }
-  else{ cart.push({ itemId:item.id, name:item.name, price:item.price, qty:1, note:"", comboContents: resolveComboContents(item) }); }
+  else{
+    const cat = findCategoryOfItem(item.id);
+    cart.push({ itemId:key, name:item.name, price:item.price, qty:1, note:"", comboContents: resolveComboContents(item), options, isBeverage: !!(cat && isBeverageCategory(cat)) });
+  }
   renderCart();
+}
+
+let drinkOptionItem = null;
+let drinkOptionPick = {};
+function onItemTap(item){
+  const cat = findCategoryOfItem(item.id);
+  if(cat && isBeverageCategory(cat) && !isCombo(item) && state.settings.drinkOptionsPrompt!==false && drinkOptionGroups().length>0){
+    if(blockIfSplitInProgress()) return;
+    openDrinkOptionModal(item);
+  }else{
+    addToCart(item);
+  }
+}
+function openDrinkOptionModal(item){
+  drinkOptionItem = item;
+  drinkOptionPick = {};
+  document.getElementById("drinkOptionTitle").textContent = item.name;
+  const box = document.getElementById("drinkOptionGroups");
+  box.innerHTML = "";
+  drinkOptionGroups().forEach(g=>{
+    const row = document.createElement("div");
+    row.className = "opt-group";
+    row.innerHTML = `<div class="opt-group-name">${escapeHtml(g.name)}</div><div class="opt-choices"></div>`;
+    const wrap = row.querySelector(".opt-choices");
+    g.choices.forEach(ch=>{
+      const b = document.createElement("button");
+      b.className = "opt-choice";
+      b.textContent = ch;
+      b.onclick = ()=>{
+        // tapping the chosen one again clears it — a group is optional
+        if(drinkOptionPick[g.name]===ch) delete drinkOptionPick[g.name]; else drinkOptionPick[g.name] = ch;
+        wrap.querySelectorAll(".opt-choice").forEach(x=> x.classList.toggle("active", drinkOptionPick[g.name]===x.textContent));
+      };
+      wrap.appendChild(b);
+    });
+    box.appendChild(row);
+  });
+  showModal("drinkOptionModal");
+}
+function confirmDrinkOptions(){
+  if(!drinkOptionItem) return;
+  const picked = drinkOptionGroups().map(g=>drinkOptionPick[g.name]).filter(Boolean).join(" · ");
+  const item = drinkOptionItem;
+  drinkOptionItem = null;
+  hideModal("drinkOptionModal");
+  addToCart(item, picked);
 }
 function changeQty(itemId, delta){
   if(blockIfSplitInProgress()) return;
@@ -360,7 +458,7 @@ function renderCart(){
       row.className = "cart-item";
       row.innerHTML = `
         <div class="ci-info">
-          <div class="ci-name">${escapeHtml(line.name)}${line.comboContents && line.comboContents.length ? ` <span class="combo-tag">套餐</span>` : ""}</div>
+          <div class="ci-name">${escapeHtml(line.name)}${line.options ? ` <span class="opt-tag">${escapeHtml(line.options)}</span>` : ""}${line.comboContents && line.comboContents.length ? ` <span class="combo-tag">套餐</span>` : ""}</div>
           <div class="ci-price">${fmt(line.price)} x ${line.qty} = ${fmt(line.price*line.qty)}</div>
           ${line.comboContents && line.comboContents.length ? `<div class="combo-contents" style="padding:0;margin:2px 0;">含: ${escapeHtml(comboContentsLabel(line.comboContents, line.qty))}</div>` : ""}
           <div class="ci-note">
@@ -507,7 +605,7 @@ function renderHeldOrdersList(){
   list.innerHTML = "";
   heldOrders.forEach(h=>{
     const sub = h.cart.reduce((s,c)=>s+c.price*c.qty,0);
-    const detail = h.cart.map(c=>`${c.name} x${c.qty}`).join("、");
+    const detail = h.cart.map(c=>`${itemDisplayName(c)} x${c.qty}`).join("、");
     const row = document.createElement("div");
     row.className = "held-item";
     row.innerHTML = `
@@ -526,7 +624,7 @@ function renderHeldOrdersList(){
       // Held orders don't have an orderNo yet (that's only assigned at checkout) — use the
       // table/customer label the staff gave it instead, so the kitchen ticket still identifies
       // which table this is for.
-      printKitchenTicketBT({ orderNo: h.label, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items: h.cart, orderType: h.orderType, table: h.table });
+      printKitchenTickets({ orderNo: h.label, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items: h.cart, orderType: h.orderType, table: h.table });
     };
     row.querySelector(".resume").onclick = ()=> resumeHeldOrder(h.id);
     row.querySelector(".void").onclick = ()=>{
@@ -699,7 +797,7 @@ let splitGroups = null; // array of {label, lines:[{itemId,name,price,qty}], sub
 function buildFullCartCtx(){
   return {
     label: null,
-    items: cart.map(c=>({name:c.name, price:c.price, qty:c.qty, note:c.note||"", comboContents:c.comboContents||[]})),
+    items: cart.map(cartLineToOrderItem),
     subtotal: cartSubtotal(),
     discountShare: discountAmount(),
     discountName: discount ? discount.name : null,
@@ -861,7 +959,7 @@ function finalizeOrderInner(paymentMethod, extra){
 
 function maybeAutoPrintKitchen(orderNo, items, type, table){
   if(!(state.settings.autoPrintKitchen && btPrinterChar)) return;
-  printKitchenTicketBT({ orderNo, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items, orderType: type, table });
+  printKitchenTickets({ orderNo, time: new Date().toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}), items, orderType: type, table });
 }
 
 function showReceipt(order, returnToSplitList){
@@ -877,9 +975,9 @@ function showReceipt(order, returnToSplitList){
     ? `<div class="r-line" style="padding:0 0 4px 12px;"><span style="font-size:12px;color:var(--text-mute);">含: ${escapeHtml(comboContentsLabel(it.comboContents, it.qty))}</span></div>`
     : "";
   const itemsBlock = isEqualSplit
-    ? `<p class="hint" style="text-align:left;margin:0 0 8px;">均分账单 · 整单内容: ${order.items.map(it=>escapeHtml(it.name)+" x"+it.qty).join("、")}</p><hr>`
+    ? `<p class="hint" style="text-align:left;margin:0 0 8px;">均分账单 · 整单内容: ${order.items.map(it=>escapeHtml(itemDisplayName(it))+" x"+it.qty).join("、")}</p><hr>`
     : `${order.items.map(it=>`
-        <div class="r-line"><span>${escapeHtml(it.name)} x${it.qty}${it.note?` <i style="color:var(--brand);font-style:normal;">(${escapeHtml(it.note)})</i>`:""}</span><span>${fmt(it.price*it.qty)}</span></div>
+        <div class="r-line"><span>${escapeHtml(itemDisplayName(it))} x${it.qty}${it.note?` <i style="color:var(--brand);font-style:normal;">(${escapeHtml(it.note)})</i>`:""}</span><span>${fmt(it.price*it.qty)}</span></div>
         ${comboLine(it)}
       `).join("")}<hr>`;
   el.innerHTML = `
@@ -951,8 +1049,18 @@ function computeDailySummary(todays){
     dineInCount: valid.filter(o=>o.orderType==="dinein").length,
     dineInSales: round2(valid.filter(o=>o.orderType==="dinein").reduce((s,o)=>s+o.total,0)),
     takeawayCount: valid.filter(o=>o.orderType==="takeaway").length,
-    takeawaySales: round2(valid.filter(o=>o.orderType==="takeaway").reduce((s,o)=>s+o.total,0))
+    takeawaySales: round2(valid.filter(o=>o.orderType==="takeaway").reduce((s,o)=>s+o.total,0)),
+    // Beverage cups/sales come from item lines (before discount/tax), counted once per real order.
+    beverageCups: beverageTotals(ordersForItemStats(valid)).cups,
+    beverageSales: beverageTotals(ordersForItemStats(valid)).sales
   };
+}
+function beverageTotals(orders){
+  let cups = 0, sales = 0;
+  orders.forEach(o=>(o.items||[]).forEach(it=>{
+    if(it.isBeverage){ cups += it.qty||0; sales += (it.price||0)*(it.qty||0); }
+  }));
+  return { cups, sales: round2(sales) };
 }
 
 function renderHistoryStats(todays){
@@ -1057,7 +1165,9 @@ function reopenOrder(orderNo){
       // historical price on the old order. addToCart merges new taps of the same dish into this
       // line by itemId alone (it doesn't re-check price), so if we kept the historical price here
       // any units added afterward via the menu grid would silently inherit the stale price too.
-      return { itemId: menuItem ? menuItem.id : "reopen_"+it.name, name: it.name, price: menuItem ? menuItem.price : it.price, qty: it.qty, note: it.note||"", comboContents: it.comboContents||[] };
+      const opts = it.options || "";
+      const baseId = menuItem ? menuItem.id : "reopen_"+it.name;
+      return { itemId: opts ? baseId+"#"+opts : baseId, name: it.name, price: menuItem ? menuItem.price : it.price, qty: it.qty, note: it.note||"", comboContents: it.comboContents||[], options: opts, isBeverage: !!it.isBeverage };
     });
     resetOrderState();
     orderType = ord.orderType || defaultOrderType();
@@ -1147,7 +1257,7 @@ function buildSplitUnits(){
   splitUnits = [];
   cart.forEach(line=>{
     for(let i=0;i<line.qty;i++){
-      splitUnits.push({ unitKey: line.itemId+"_"+i, itemId: line.itemId, name: line.name, price: line.price, note: line.note||"", comboContents: line.comboContents||[] });
+      splitUnits.push({ unitKey: line.itemId+"_"+i, itemId: line.itemId, name: line.name, price: line.price, note: line.note||"", comboContents: line.comboContents||[], options: line.options||"", isBeverage: !!line.isBeverage });
     }
   });
   splitUnitAssign = {};
@@ -1174,7 +1284,7 @@ function renderSplitItems(){
     const badgeText = assignedIdx!==undefined ? splitDraftGroups[assignedIdx].label : "未分配";
     row.innerHTML = `
       <div>
-        <div class="su-name">${escapeHtml(u.name)}</div>
+        <div class="su-name">${escapeHtml(itemDisplayName(u))}</div>
         <div class="su-price">${fmt(u.price)}</div>
       </div>
       <span class="su-badge">${badgeText}</span>
@@ -1246,7 +1356,7 @@ function confirmSplitInner(){
       const subtotal = round2(discSub + discountShare);
       return {
         label: String(i+1),
-        items: cart.map(c=>({name:c.name, price:c.price, qty:c.qty, note:c.note||"", comboContents:c.comboContents||[]})),
+        items: cart.map(cartLineToOrderItem),
         subtotal,
         discountShare,
         discountName: discount ? discount.name : null,
@@ -1282,7 +1392,7 @@ function confirmSplitInner(){
       // aggregate units back into item lines for the receipt
       const linesMap = {};
       unitsInGroup.forEach(u=>{
-        if(!linesMap[u.itemId]) linesMap[u.itemId] = {name:u.name, price:u.price, qty:0, note:u.note||"", comboContents:u.comboContents||[]};
+        if(!linesMap[u.itemId]) linesMap[u.itemId] = {name:u.name, price:u.price, qty:0, note:u.note||"", comboContents:u.comboContents||[], options:u.options||"", isBeverage:!!u.isBeverage};
         linesMap[u.itemId].qty++;
       });
       return {
@@ -1313,7 +1423,7 @@ function confirmSplitInner(){
 
   splitGroups = groups.map(g=>Object.assign({paid:false}, g));
   activeOrderNo = peekOrderNo();
-  maybeAutoPrintKitchen(activeOrderNo, cart.map(c=>({name:c.name, qty:c.qty, note:c.note||""})), orderType, orderType==="dinein" ? orderTable : null);
+  maybeAutoPrintKitchen(activeOrderNo, cart.map(cartLineToOrderItem), orderType, orderType==="dinein" ? orderTable : null);
   hideModal("splitModal");
   renderSplitPayList();
   showModal("splitPayModal");
@@ -1385,6 +1495,9 @@ function populateSettingsForm(){
   document.getElementById("inputPaperWidth").value = state.settings.paperWidth || "58";
   document.getElementById("inputAutoPrintKitchen").checked = state.settings.autoPrintKitchen!==false;
   document.getElementById("inputTableList").value = state.settings.tableList || "";
+  document.getElementById("inputSeparateDrinkTicket").checked = state.settings.separateDrinkTicket!==false;
+  document.getElementById("inputDrinkOptionsPrompt").checked = state.settings.drinkOptionsPrompt!==false;
+  document.getElementById("inputDrinkOptions").value = state.settings.drinkOptions || "";
   document.getElementById("inputDefaultOrderType").value = state.settings.defaultOrderType==="takeaway" ? "takeaway" : "dinein";
   document.getElementById("inputNewPin").value = "";
   document.getElementById("defaultPinWarning").classList.toggle("hidden", state.settings.pin!=="0000");
@@ -1473,6 +1586,9 @@ function saveGeneralSettings(){
   state.settings.paperWidth = document.getElementById("inputPaperWidth").value;
   state.settings.autoPrintKitchen = document.getElementById("inputAutoPrintKitchen").checked;
   state.settings.tableList = document.getElementById("inputTableList").value.trim();
+  state.settings.separateDrinkTicket = document.getElementById("inputSeparateDrinkTicket").checked;
+  state.settings.drinkOptionsPrompt = document.getElementById("inputDrinkOptionsPrompt").checked;
+  state.settings.drinkOptions = document.getElementById("inputDrinkOptions").value.trim();
   state.settings.defaultOrderType = document.getElementById("inputDefaultOrderType").value;
   const newPin = document.getElementById("inputNewPin").value.trim();
   if(newPin.length>=4){ state.settings.pin = newPin; }
@@ -2356,7 +2472,7 @@ function receiptToPrintBlocks(order){
   blocks.push({ text: `${order.date} ${order.time}`, size:"sm", align:"center", spacingAfter: typeLabel ? 2 : 10 });
   if(typeLabel) blocks.push({ text: typeLabel, bold:true, align:"center", spacingAfter:10 });
   order.items.forEach(it=>{
-    blocks.push({ text: `${it.name} x${it.qty}${it.note?" ("+it.note+")":""}` });
+    blocks.push({ text: `${itemDisplayName(it)} x${it.qty}${it.note?" ("+it.note+")":""}` });
     blocks.push({ text: `  ${fmt(it.price*it.qty)}`, align:"right" });
     if(it.comboContents && it.comboContents.length){
       blocks.push({ text: `  含: ${comboContentsLabel(it.comboContents, it.qty)}`, size:"sm" });
@@ -2408,6 +2524,7 @@ function showSettlement(){
     ${(s.dineInCount+s.takeawayCount)>0 ? `<hr>
     <div class="r-line"><span>堂食 (${s.dineInCount}单)</span><span>${fmt(s.dineInSales)}</span></div>
     <div class="r-line"><span>外带 (${s.takeawayCount}单)</span><span>${fmt(s.takeawaySales)}</span></div>` : ""}
+    ${s.beverageCups>0 ? `<hr><div class="r-line"><span>饮料 (${s.beverageCups}杯)</span><span>${fmt(s.beverageSales)}</span></div>` : ""}
     <hr>
     <div class="r-line"><span>应有现金 (抽屉清点用)</span><span>${fmt(s.cashSales)}</span></div>
     <div class="r-meta" style="margin-top:10px;">打印时间: ${new Date().toLocaleString("en-MY")}</div>
@@ -2433,6 +2550,10 @@ function settlementToPrintBlocks(s, dateStr){
     blocks.push({ text: `堂食 (${s.dineInCount}单)  ${fmt(s.dineInSales)}`, align:"right" });
     blocks.push({ text: `外带 (${s.takeawayCount}单)  ${fmt(s.takeawaySales)}`, align:"right", spacingAfter:6 });
   }
+  if(s.beverageCups>0){
+    blocks.push({ text: "--------------------------------", spacingAfter:4 });
+    blocks.push({ text: `饮料 (${s.beverageCups}杯)  ${fmt(s.beverageSales)}`, align:"right", spacingAfter:6 });
+  }
   blocks.push({ text: "--------------------------------", spacingAfter:4 });
   blocks.push({ text: `应有现金 (抽屉清点用)  ${fmt(s.cashSales)}`, align:"right", spacingAfter:6 });
   blocks.push({ text: `打印时间: ${new Date().toLocaleString("en-MY")}`, size:"sm", align:"center" });
@@ -2441,6 +2562,7 @@ function settlementToPrintBlocks(s, dateStr){
 
 function kitchenTicketToPrintBlocks(order){
   const blocks = [];
+  if(order.ticketTitle) blocks.push({ text: `【${order.ticketTitle}】`, size:"lg", bold:true, align:"center" });
   blocks.push({ text: `订单 ${order.orderNo}`, size:"lg", bold:true, align:"center" });
   // Big and bold on purpose: the kitchen needs to see at a glance whether to plate it for a table
   // (and which one) or bag it to go.
@@ -2449,6 +2571,7 @@ function kitchenTicketToPrintBlocks(order){
   blocks.push({ text: `${order.time}`, size:"sm", align:"center", spacingAfter:10 });
   order.items.forEach(it=>{
     blocks.push({ text: `${it.name}  x${it.qty}`, size:"lg", bold:true });
+    if(it.options) blocks.push({ text: `  ${it.options}`, size:"lg", bold:true });
     if(it.note) blocks.push({ text: `>> ${it.note}`, bold:true });
     if(it.comboContents && it.comboContents.length){
       it.comboContents.forEach(c=>{
@@ -2462,6 +2585,22 @@ function kitchenTicketToPrintBlocks(order){
 
 function printReceiptBT(order){ return printBlocks(receiptToPrintBlocks(order)); }
 function printKitchenTicketBT(order){ return printBlocks(kitchenTicketToPrintBlocks(order)); }
+// Kitchen ticket entry point for everything (auto-print, reprint, held orders). With the
+// separate-drink-ticket setting on, drinks and food print as two tickets so each station gets only
+// its own items; otherwise (or when the order has no drinks) it's the single ticket it always was.
+async function printKitchenTickets(order){
+  const items = order.items || [];
+  const drinks = items.filter(i=>i.isBeverage);
+  const food = items.filter(i=>!i.isBeverage);
+  if(state.settings.separateDrinkTicket===false || drinks.length===0){
+    return printKitchenTicketBT(order);
+  }
+  if(food.length>0){
+    const ok = await printKitchenTicketBT(Object.assign({}, order, { items: food, ticketTitle: "厨房单" }));
+    if(ok===false) return false; // printer not connected / failed — don't also fire the drink ticket's error
+  }
+  return printKitchenTicketBT(Object.assign({}, order, { items: drinks, ticketTitle: "饮料单" }));
+}
 function printSettlementBT(summary, dateStr){ return printBlocks(settlementToPrintBlocks(summary, dateStr)); }
 
 function resizeImageFile(file, maxSize, quality, callback){
@@ -2688,6 +2827,7 @@ function renderMenuEditor(){
     box.innerHTML = `
       <div class="cat-editor-head">
         <input type="text" value="${escapeHtml(cat.name)}" data-cat="${cat.id}" class="cat-name-input">
+        <label class="bev-toggle" title="饮料类:点餐时会问热/冷等选项,并算进饮料统计和饮料单"><input type="checkbox" class="cat-bev-input" ${isBeverageCategory(cat)?"checked":""}> 🥤饮料</label>
         <button data-act="delcat" data-cat="${cat.id}">🗑</button>
       </div>
       <div class="item-editor-list" data-list="${cat.id}"></div>
@@ -2801,6 +2941,7 @@ function renderMenuEditor(){
       cat.items.push({ id:uid(), name:"新菜品", price:0, available:true, image:"" });
       saveState(); renderMenuEditor(); renderItemGridIfNeeded();
     };
+    box.querySelector(".cat-bev-input").onchange = (e)=>{ cat.beverage = e.target.checked; saveState(); };
     box.querySelector(".cat-name-input").onchange = (e)=>{
       cat.name = e.target.value.trim() || cat.name;
       saveState(); renderMenuEditor(); renderCategoryTabs();
@@ -3057,6 +3198,7 @@ function init(){
   document.getElementById("btnUndoCart").onclick = undoCart;
   document.getElementById("btnTypeDineIn").onclick = ()=> setOrderType("dinein");
   document.getElementById("btnTypeTakeaway").onclick = ()=> setOrderType("takeaway");
+  document.getElementById("btnConfirmDrinkOptions").onclick = confirmDrinkOptions;
   document.getElementById("btnPickTable").onclick = openTableModal;
   document.getElementById("mainTypeDineIn").onclick = ()=> setOrderType("dinein");
   document.getElementById("mainTypeTakeaway").onclick = ()=> setOrderType("takeaway");
@@ -3144,7 +3286,7 @@ function init(){
   };
   document.getElementById("btnPrintKitchen").onclick = ()=>{
     if(!currentReceiptOrder) return;
-    printKitchenTicketBT(currentReceiptOrder);
+    printKitchenTickets(currentReceiptOrder);
   };
   document.getElementById("btnPrintSettlement").onclick = showSettlement;
   document.getElementById("btnPrintSettlementDoc").onclick = ()=>{

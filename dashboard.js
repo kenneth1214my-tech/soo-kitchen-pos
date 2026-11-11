@@ -85,8 +85,24 @@ function computeStats(orders){
   const dayRows = Object.keys(byDay).sort().map(date=>({date, revenue:byDay[date]}));
   const maxDay = dayRows.reduce((m,r)=>Math.max(m,r.revenue), 0);
 
+  // Equal-split bills each carry the whole order's items — count each real order's items once.
+  const seenEqual = new Set();
+  const itemOrders = valid.filter(o=>{
+    if(o.isSplit && o.splitKind==="equal"){
+      const i = String(o.orderNo).lastIndexOf("-");
+      const key = o.date + "|" + (i>0 ? String(o.orderNo).slice(0,i) : o.orderNo);
+      if(seenEqual.has(key)) return false;
+      seenEqual.add(key);
+    }
+    return true;
+  });
+  let beverageCups = 0, beverageRevenue = 0;
+  itemOrders.forEach(o=>(o.items||[]).forEach(it=>{
+    if(it.isBeverage){ beverageCups += it.qty||0; beverageRevenue += (it.price||0)*(it.qty||0); }
+  }));
+
   const itemQty = {};
-  valid.forEach(o=>{
+  itemOrders.forEach(o=>{
     (o.items||[]).forEach(it=>{
       itemQty[it.name] = (itemQty[it.name]||0) + (it.qty||0);
     });
@@ -96,7 +112,7 @@ function computeStats(orders){
 
   const dineInRevenue = valid.filter(o=>o.orderType==="dinein").reduce((s,o)=>s+(o.total||0),0);
   const takeawayRevenue = valid.filter(o=>o.orderType==="takeaway").reduce((s,o)=>s+(o.total||0),0);
-  return { dineInRevenue, takeawayRevenue, totalRevenue, cashRevenue, qrRevenue, avg, orderCount: valid.length, dayRows, maxDay, topItems };
+  return { beverageCups, beverageRevenue, dineInRevenue, takeawayRevenue, totalRevenue, cashRevenue, qrRevenue, avg, orderCount: valid.length, dayRows, maxDay, topItems };
 }
 
 function render(orders){
@@ -105,6 +121,7 @@ function render(orders){
   document.getElementById("statOrders").textContent = stats.orderCount;
   document.getElementById("statAvg").textContent = fmt(stats.avg);
   document.getElementById("statSplit").textContent = `${fmt(stats.cashRevenue)} / ${fmt(stats.qrRevenue)}`;
+  document.getElementById("statBeverage").textContent = `${stats.beverageCups} 杯 / ${fmt(stats.beverageRevenue)}`;
   document.getElementById("statType").textContent = `${fmt(stats.dineInRevenue)} / ${fmt(stats.takeawayRevenue)}`;
 
   const dayChart = document.getElementById("dayChart");

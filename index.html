@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202611111100">
+<link rel="manifest" href="manifest.json?v=202611121000">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202611111100">
-<link rel="icon" href="icon-192.png?v=202611111100">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611121000">
+<link rel="icon" href="icon-192.png?v=202611121000">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202611111100">
+<link rel="stylesheet" href="style.css?v=202611121000">
 </head>
 <body>
 
@@ -223,6 +223,15 @@
   </div>
 </div>
 
+<!-- Drink Options Modal -->
+<div id="drinkOptionModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span id="drinkOptionTitle">饮料选项</span><button class="close-btn" data-close="drinkOptionModal">✕</button></div>
+    <div id="drinkOptionGroups" class="opt-groups"></div>
+    <div style="padding:0 18px;"><button id="btnConfirmDrinkOptions" class="primary-btn" style="width:100%;">加入订单</button></div>
+  </div>
+</div>
+
 <!-- Table Picker Modal -->
 <div id="tableModal" class="modal hidden">
   <div class="modal-box">
@@ -329,6 +338,9 @@
 
         <label>桌号列表 (堂食用,用逗号分隔,留空则不显示选桌)</label>
         <input type="text" id="inputTableList" placeholder="例如：1,2,3,4,5,6,A1,A2">
+        <label class="checkbox-row"><input type="checkbox" id="inputDrinkOptionsPrompt"> 点饮料时弹出选项 (热/冷、糖度、冰量)</label>
+        <label>饮料选项 (每行一组,格式「组名: 选项1,选项2」)</label>
+        <textarea id="inputDrinkOptions" rows="4" placeholder="温度: 热,冷&#10;糖度: 正常,少糖,无糖&#10;冰量: 正常冰,少冰,去冰"></textarea>
         <label>新订单默认类型</label>
         <select id="inputDefaultOrderType" class="select-input">
           <option value="dinein">堂食</option>
@@ -374,6 +386,7 @@
           <option value="80">80mm</option>
         </select>
         <label class="checkbox-row"><input type="checkbox" id="inputAutoPrintKitchen"> 结账成功后自动打印厨房单</label>
+        <label class="checkbox-row"><input type="checkbox" id="inputSeparateDrinkTicket"> 饮料单独打印一张「饮料单」(食物和饮料分开两张)</label>
 
         <hr>
         <label>数据备份</label>
@@ -456,6 +469,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202611111100" defer></script>
+<script src="app.js?v=202611121000" defer></script>
 </body>
 </html>
