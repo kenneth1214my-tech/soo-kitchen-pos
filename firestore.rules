@@ -13,7 +13,7 @@ service cloud.firestore {
       // menu published by the POS (read by customers)
       allow read: if true;
       allow create, update: if request.resource.data.keys().hasOnly(
-        ['v', 'shopName', 'ordersOpen', 'drinkOptions', 'drinkOptionsPrompt', 'categories', 'updatedAt']);
+        ['v', 'shopName', 'ordersOpen', 'drinkOptions', 'drinkOptionsPrompt', 'categories', 'updatedAt', 'photoRev']);
 
       // orders sent by customers: create-only, they can never edit or delete anything
       match /inbox/{orderId} {
@@ -25,6 +25,13 @@ service cloud.firestore {
           && request.resource.data.items.size() <= 30
           && request.resource.data.createdAt == request.time;
         allow update, delete: if false;
+      }
+
+      // small item thumbnails, published in a few chunks by the POS and read by customers' phones
+      match /photos/{chunkId} {
+        allow read: if true;
+        allow create, update: if request.resource.data.keys().hasOnly(['rev', 'imgs', 'updatedAt']);
+        allow delete: if false;
       }
 
       // accepted / rejected, written by the POS and read by the customer's phone

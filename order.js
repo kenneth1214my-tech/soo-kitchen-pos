@@ -30,6 +30,7 @@ const ICE_GROUP_RE = /冰|ice/i;
 
 let db = null, shopRef = null;
 let menu = null;                 // latest publicShops/{id} document
+let photos = {}, photosRev = ""; // item id -> small thumbnail (data URL), from publicShops/{id}/photos/*
 let activeCat = null;
 let cart = [];                   // {key,id,name,base,price,extra,qty,note,opts:[{g,l}],optsText}
 let optItem = null, optPick = {};
@@ -95,7 +96,8 @@ function renderItems(){
     const off = it.available === false;
     const row = document.createElement("div");
     row.className = "item" + (off ? " off" : "");
-    row.innerHTML = `
+    const ph = menu.photoRev ? `<div class="item-photo">${photos[it.id] ? `<img src="${photos[it.id]}" alt="">` : "🍽️"}</div>` : "";
+    row.innerHTML = `${ph}
       <div class="item-main">
         <div class="item-name">${esc(it.name)}</div>
         ${it.combo ? `<div class="item-sub">含 ${esc(it.combo)}</div>` : ""}
@@ -282,6 +284,20 @@ function setStatus(st){
 }
 $("btnMore").onclick = () => $("doneSheet").classList.add("hidden");
 
+// Photos live in separate chunk documents; fetched once per photoRev (they only change when the shop edits a photo).
+function loadPhotos(){
+  const rev = (menu && menu.photoRev) || "";
+  if(!rev){ photos = {}; photosRev = ""; return; }
+  if(rev === photosRev || !menu.ordersOpen) return;
+  shopRef.collection("photos").get().then(res => {
+    if(!menu || menu.photoRev !== rev) return;
+    const m = {};
+    res.docs.forEach(d => { const x = d.data(); if(x && x.rev === rev && x.imgs) Object.assign(m, x.imgs); });
+    photos = m; photosRev = rev;
+    if(menu.ordersOpen) renderItems();
+  }).catch(() => {});
+}
+
 // ---- start ----
 function renderAll(){
   hideMsg();
@@ -321,6 +337,7 @@ function init(){
     if(!snap.exists){ menu = null; showMsg("这家店还没有开放扫码点餐。<br>This shop isn't taking QR orders yet.", true); return; }
     menu = snap.data();
     renderAll();
+    loadPhotos();
   }, err => {
     showMsg("载入菜单失败,请检查网络后重新整理页面。<br>Couldn't load the menu — check your connection and reload.", true);
   });

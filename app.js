@@ -2244,8 +2244,9 @@ function custPublicRef(){
   return (cloudDb && id) ? cloudDb.collection("publicShops").doc(id) : null;
 }
 
-// What customers get to see. No photos (keeps the document small and the page fast on mobile data),
-// no PIN, no payment QR, no sales data.
+// What customers get to see. Photos are NOT inside this document (it would blow Firestore's 1 MB
+// limit): they go out as small thumbnails in separate chunk documents, see publishPublicPhotos.
+// No PIN, no payment QR, no sales data.
 function buildPublicMenuDoc(){
   const s = state.settings;
   return {
@@ -2267,15 +2268,76 @@ function buildPublicMenuDoc(){
     }))
   };
 }
-function publishPublicMenu(){
+const PHOTO_REV_KEY = "sk_pos_photo_rev_v1";
+const PHOTO_CHUNK_CHARS = 700000;          // stay well under the 1 MB document limit
+let custPublishBusy = false, custPublishAgain = false;
+let custPhotoNote = "", custPhotoFail = null;
+
+// Fingerprint of every item photo; the thumbnails are rebuilt/re-uploaded only when this changes.
+function itemPhotoRev(){
+  let h = 5381, n = 0;
+  const mix = s=>{ for(let i=0;i<s.length;i++) h = ((h*33) ^ s.charCodeAt(i)) >>> 0; };
+  state.menu.forEach(c=>c.items.forEach(it=>{ if(it.image){ mix(String(it.id)); mix(it.image); n++; } }));
+  return n ? "t1-" + n + "-" + h.toString(36) : "";
+}
+async function makeThumb(dataUrl){
+  const img = await loadImageEl(dataUrl);
+  const sc = Math.min(1, 160 / Math.max(img.width, img.height));
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(img.width * sc)); c.height = Math.max(1, Math.round(img.height * sc));
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.6);
+}
+// Resolves true when the thumbnails for `rev` are on the server. Throws if Firestore refuses the write
+// (typically: the security rules haven't been updated with the /photos block yet).
+async function publishPublicPhotos(ref, rev){
+  const pid = state.settings.publicId;
+  let saved = null; try{ saved = JSON.parse(localStorage.getItem(PHOTO_REV_KEY)); }catch(e){}
+  if(saved && saved.pid === pid && saved.rev === rev) return true;
+  if(custPhotoFail && custPhotoFail.rev === rev && Date.now() - custPhotoFail.at < 60000) throw new Error("retry later");
+  const chunks = []; let cur = {}, size = 0;
+  for(const cat of state.menu) for(const it of cat.items){
+    if(!it.image) continue;
+    let t; try{ t = await makeThumb(it.image); }catch(e){ continue; }
+    if(size > 0 && size + t.length > PHOTO_CHUNK_CHARS){ chunks.push(cur); cur = {}; size = 0; }
+    cur[it.id] = t; size += t.length + String(it.id).length;
+  }
+  if(size > 0) chunks.push(cur);
+  try{
+    for(let i=0;i<chunks.length;i++){
+      await ref.collection("photos").doc("c" + i).set({ rev, imgs: chunks[i], updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
+  }catch(e){ custPhotoFail = { rev, at: Date.now() }; throw e; }
+  custPhotoFail = null;
+  try{ localStorage.setItem(PHOTO_REV_KEY, JSON.stringify({ pid, rev })); }catch(e){}
+  return chunks.length > 0;
+}
+async function publishPublicMenu(){
   const ref = custPublicRef();
   if(!ref) return;
-  ref.set(Object.assign(buildPublicMenuDoc(), { updatedAt: firebase.firestore.FieldValue.serverTimestamp() })).then(()=>{
-    if(custPublishError){ custPublishError = ""; renderCustomerOrderStatus(); }
-  }).catch(err=>{
+  if(custPublishBusy){ custPublishAgain = true; return; }
+  custPublishBusy = true;
+  try{
+    const rev = itemPhotoRev();
+    let photoOk = false;
+    custPhotoNote = "";
+    if(rev){
+      try{ photoOk = await publishPublicPhotos(ref, rev); }
+      catch(e){ custPhotoNote = "菜品照片没能发布到顾客页(多半是 Firebase 规则还没更新:按「复制 Firebase 规则」,贴到 Firebase 规则页再「发布」一次)"; }
+    }
+    const doc = Object.assign(buildPublicMenuDoc(), { updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    if(photoOk) doc.photoRev = rev;      // only set once the photos are really there (also keeps old rules working)
+    await ref.set(doc);
+    custPublishError = "";
+  }catch(err){
     custPublishError = (err && err.message) ? err.message : "发布失败";
+  }finally{
+    custPublishBusy = false;
     renderCustomerOrderStatus();
-  });
+    if(custPublishAgain){ custPublishAgain = false; publishPublicMenu(); }
+  }
 }
 
 // Link printed on the QR / written to the NFC sticker. Only the (public) Firebase project id + web API
@@ -2508,7 +2570,10 @@ function renderCustomerOrderStatus(){
   if(custPublishError){ el.textContent = "⚠️ " + custPublishError + " — 请确认 Firestore 规则已按说明设定"; el.style.color = "var(--danger)"; return; }
   el.style.color = "var(--text-mute)";
   if(!cfg || !cfg.enabled) el.textContent = "需要先连接上面的云端同步,才能开放顾客点单。";
-  else if(s.customerOrdersOpen) el.textContent = "✅ 已开放。顾客扫码送出的单,会出现在顶部的「📲 顾客点单」。";
+  else if(s.customerOrdersOpen){
+    el.textContent = "✅ 已开放。顾客扫码送出的单,会出现在顶部的「📲 顾客点单」。";
+    if(custPhotoNote){ el.textContent += "\n⚠️ " + custPhotoNote; el.style.color = "var(--danger)"; el.style.whiteSpace = "pre-line"; }
+  }
   else el.textContent = "目前关闭,顾客扫码会看到「暂时不接受点单」。";
 }
 
@@ -2598,7 +2663,7 @@ async function printCustomerQrSheet(){
     alertToast(err && err.message ? err.message : "无法产生二维码");
   }
 }
-const CUSTOMER_RULES_TEXT = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n\n    // The POS and the sales dashboard have no login: the secret shop code is their key.\n    // (Customers never see this code - their QR/NFC link only carries the separate public code below.)\n    match /posShops/{shopId}/{document=**} {\n      allow read, write: if true;\n    }\n\n    // Customer ordering. The public code in the QR/NFC link only opens this branch.\n    match /publicShops/{publicId} {\n      // menu published by the POS (read by customers)\n      allow read: if true;\n      allow create, update: if request.resource.data.keys().hasOnly(\n        ['v', 'shopName', 'ordersOpen', 'drinkOptions', 'drinkOptionsPrompt', 'categories', 'updatedAt']);\n\n      // orders sent by customers: create-only, they can never edit or delete anything\n      match /inbox/{orderId} {\n        allow read: if true;\n        allow create: if request.resource.data.keys().hasOnly(\n            ['code', 'orderType', 'table', 'name', 'note', 'items', 'subtotal', 'createdAt', 'expireAt', 'clientId'])\n          && request.resource.data.items is list\n          && request.resource.data.items.size() > 0\n          && request.resource.data.items.size() <= 30\n          && request.resource.data.createdAt == request.time;\n        allow update, delete: if false;\n      }\n\n      // accepted / rejected, written by the POS and read by the customer's phone\n      match /status/{orderId} {\n        allow read: if true;\n        allow create, update: if request.resource.data.keys().hasOnly(['status', 'at', 'label'])\n          && request.resource.data.status in ['accepted', 'rejected'];\n        allow delete: if false;\n      }\n    }\n  }\n}\n";
+const CUSTOMER_RULES_TEXT = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n\n    // The POS and the sales dashboard have no login: the secret shop code is their key.\n    // (Customers never see this code - their QR/NFC link only carries the separate public code below.)\n    match /posShops/{shopId}/{document=**} {\n      allow read, write: if true;\n    }\n\n    // Customer ordering. The public code in the QR/NFC link only opens this branch.\n    match /publicShops/{publicId} {\n      // menu published by the POS (read by customers)\n      allow read: if true;\n      allow create, update: if request.resource.data.keys().hasOnly(\n        ['v', 'shopName', 'ordersOpen', 'drinkOptions', 'drinkOptionsPrompt', 'categories', 'updatedAt', 'photoRev']);\n\n      // orders sent by customers: create-only, they can never edit or delete anything\n      match /inbox/{orderId} {\n        allow read: if true;\n        allow create: if request.resource.data.keys().hasOnly(\n            ['code', 'orderType', 'table', 'name', 'note', 'items', 'subtotal', 'createdAt', 'expireAt', 'clientId'])\n          && request.resource.data.items is list\n          && request.resource.data.items.size() > 0\n          && request.resource.data.items.size() <= 30\n          && request.resource.data.createdAt == request.time;\n        allow update, delete: if false;\n      }\n\n      // small item thumbnails, published in a few chunks by the POS and read by customers' phones\n      match /photos/{chunkId} {\n        allow read: if true;\n        allow create, update: if request.resource.data.keys().hasOnly(['rev', 'imgs', 'updatedAt']);\n        allow delete: if false;\n      }\n\n      // accepted / rejected, written by the POS and read by the customer's phone\n      match /status/{orderId} {\n        allow read: if true;\n        allow create, update: if request.resource.data.keys().hasOnly(['status', 'at', 'label'])\n          && request.resource.data.status in ['accepted', 'rejected'];\n        allow delete: if false;\n      }\n    }\n  }\n}\n";
 function copyCustomerRules(){
   const done = ()=> alertToast("已复制。到 Firebase 控制台 → Firestore → 规则,整段贴上并「发布」");
   if(navigator.clipboard) navigator.clipboard.writeText(CUSTOMER_RULES_TEXT).then(done, ()=> prompt("复制这段规则:", CUSTOMER_RULES_TEXT));
