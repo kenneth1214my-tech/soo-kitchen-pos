@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202611140100">
+<link rel="manifest" href="manifest.json?v=202611150200">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202611140100">
-<link rel="icon" href="icon-192.png?v=202611140100">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611150200">
+<link rel="icon" href="icon-192.png?v=202611150200">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202611140100">
+<link rel="stylesheet" href="style.css?v=202611150200">
 </head>
 <body>
 
@@ -34,6 +34,7 @@
     <span id="clock"></span>
   </div>
   <div class="topbar-actions">
+    <button class="icon-btn hidden" id="btnCustomerOrders" title="顾客扫码点的单">📲 顾客点单 <span id="custCountBadge" class="count-badge hidden">0</span></button>
     <button class="icon-btn" id="btnHeldOrders" title="挂起的订单">🧷 挂单 <span id="heldCountBadge" class="count-badge hidden">0</span></button>
     <button class="icon-btn" id="btnHistory" title="今日订单">🧾 记录</button>
     <button class="icon-btn" id="btnSettings" title="设置">⚙ 设置</button>
@@ -262,6 +263,24 @@
     <p class="hint" style="text-align:left;padding:0 18px;margin:10px 0 0;">橙色 = 这桌已有挂起(未结账)的订单</p>
     <div id="tableGrid" class="table-grid"></div>
     <div style="padding:0 18px;"><button id="btnClearTable" class="secondary-btn" style="width:100%;">不指定桌号</button></div>
+  </div>
+</div>
+
+<!-- Customer orders (QR / NFC) -->
+<div id="customerOrdersModal" class="modal hidden">
+  <div class="modal-box wide">
+    <div class="modal-header"><span>📲 顾客扫码点单</span><button class="close-btn" data-close="customerOrdersModal">✕</button></div>
+    <p class="hint" style="text-align:left;padding:0 18px;margin:8px 0 0;">按「接受」后,会加入这一桌的挂单(同一桌再点会并进同一张)。价格以店里的菜单为准。顾客吃完到柜台,从「挂单」恢复后结账。</p>
+    <div id="customerOrdersList" class="history-list"></div>
+  </div>
+</div>
+
+<div id="customerLinksModal" class="modal hidden">
+  <div class="modal-box wide">
+    <div class="modal-header"><span>桌号二维码 / NFC 链接</span><button class="close-btn" data-close="customerLinksModal">✕</button></div>
+    <p class="hint" style="text-align:left;padding:0 18px;margin:8px 0 0;">每张桌一条链接,二维码和 NFC 贴纸用的是同一条。NFC 建议买 NTAG215(容量够);写入要用 Android 的 Chrome,或用手机 App「NFC Tools」写入复制的链接。</p>
+    <div style="padding:10px 18px 0;"><button id="btnPrintQrSheet" class="primary-btn" style="width:100%;margin:0;">🖨 打印全部二维码</button></div>
+    <div id="customerLinksList" class="cl-list"></div>
   </div>
 </div>
 
@@ -498,6 +517,16 @@
         </div>
         <button id="btnCloudDisconnect" class="danger-btn hidden" style="margin-top:10px;">断开云端同步</button>
         <p id="cloudSyncStatus" class="hint" style="text-align:left;">尚未连接</p>
+
+        <hr>
+        <h3 style="margin:0 0 6px;font-size:16px;">📲 顾客扫码 / NFC 点单</h3>
+        <p class="hint" style="text-align:left;">顾客用手机扫桌上的二维码,或碰一下 NFC 贴纸,就能看菜单点餐;你在「📲 顾客点单」按「接受」后才进厨房。付款仍在柜台。需要先连接上面的云端同步,并在 Firebase 加一次安全规则(按下面「复制规则」,贴到 Firebase → Firestore → 规则 → 发布)。</p>
+        <label class="checkbox-row"><input type="checkbox" id="inputCustomerOrdersOpen"> 开放顾客扫码点单</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+          <button id="btnCustomerLinks" class="secondary-btn">📲 桌号二维码 / NFC</button>
+          <button id="btnCopyRules" class="secondary-btn">📋 复制 Firebase 规则</button>
+        </div>
+        <p id="customerOrderStatus" class="hint" style="text-align:left;"></p>
       </div>
     </div>
   </div>
@@ -505,6 +534,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202611140100" defer></script>
+<script src="app.js?v=202611150200" defer></script>
 </body>
 </html>

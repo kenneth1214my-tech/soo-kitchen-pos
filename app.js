@@ -26,7 +26,9 @@ const DEFAULT_STATE = {
     defaultOrderType:"dinein",
     promotions:[],
     roundingUnit:10,
-    roundingCashOnly:false
+    roundingCashOnly:false,
+    customerOrdersOpen:false,
+    publicId:""
   },
   menu:[
     { id:"cat1", name:"主食 Mains", items:[
@@ -1172,7 +1174,13 @@ async function printMaster(){
 }
 // Optional (设置 → 结账后自动打印): the old behaviour, now as separate food and drink tickets.
 async function maybeAutoPrintTickets(order){
-  if(!state.settings.autoPrintTickets || printingNow) return;
+  if(!state.settings.autoPrintTickets) return;
+  return printTicketsSequence(order);
+}
+// Kitchen ticket then drink ticket for an order object; marks them printed. Shared by the optional
+// auto-print and by 接受并打印 on a customer order.
+async function printTicketsSequence(order){
+  if(printingNow) return;
   const { food, drinks } = orderTicketParts(order);
   printingNow = true; setPrintBusy(true);
   try{
@@ -1716,6 +1724,8 @@ function populateSettingsForm(){
   document.getElementById("inputTaxRate").value = state.settings.taxRate;
   document.getElementById("inputRoundingUnit").value = String(roundingUnit());
   document.getElementById("inputRoundingCashOnly").checked = !!state.settings.roundingCashOnly;
+  document.getElementById("inputCustomerOrdersOpen").checked = !!state.settings.customerOrdersOpen;
+  renderCustomerOrderStatus();
   document.getElementById("inputDiscountPinRequired").checked = state.settings.discountPinRequired;
   document.getElementById("inputDeviceLabel").value = state.settings.deviceLabel || "";
   document.getElementById("inputPaperWidth").value = state.settings.paperWidth || "58";
@@ -2173,6 +2183,7 @@ function connectCloudSync(configObj, shopId, isReconnect){
     if(Array.isArray(remote.menu)) state.menu = remote.menu;
     if(remote.lastModified) state.lastModified = remote.lastModified;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    ensureCustomerOrderSetup();
     migrateColdSurcharge(); // another device may still hold the old global "冷+x" setting
     applyingRemoteCloudState = false;
 
@@ -2189,6 +2200,7 @@ function connectCloudSync(configObj, shopId, isReconnect){
   });
 
   if(!isReconnect) alertToast("云端同步已连接");
+  ensureCustomerOrderSetup();
 }
 
 function startCloudSync(){
@@ -2207,12 +2219,399 @@ function startCloudSync(){
   renderCloudSyncStatus();
 }
 
+// ---------- Customer ordering (scan a table QR / tap an NFC sticker) ----------
+// The customer page (order.html) reads a PUBLIC copy of the menu at publicShops/{publicId}, and drops
+// each order into publicShops/{publicId}/inbox. Nothing about the shop's real data (posShops/{shopId},
+// i.e. sales history) is reachable from the link on the table, because the link only carries the
+// separate publicId. Staff review each order here and press 接受 -> it becomes a held order for that
+// table (items re-priced from THIS menu, never from what the phone sent).
+const CUST_HANDLED_KEY = "sk_pos_handled_customer_orders_v1";
+let custInboxUnsub = null, custStatusUnsub = null, custStarted = "";
+let custInbox = new Map(), custStatus = new Map();
+let custInboxReady = false, custStatusReady = false;
+const custSeen = new Set();
+let custPublishError = "";
+
+function custHandledSet(){
+  try{ return new Set(JSON.parse(localStorage.getItem(CUST_HANDLED_KEY)) || []); }catch(e){ return new Set(); }
+}
+function custMarkHandledLocal(id){
+  const s = custHandledSet(); s.add(id);
+  localStorage.setItem(CUST_HANDLED_KEY, JSON.stringify([...s].slice(-300)));
+}
+function custPublicRef(){
+  const id = state.settings.publicId;
+  return (cloudDb && id) ? cloudDb.collection("publicShops").doc(id) : null;
+}
+
+// What customers get to see. No photos (keeps the document small and the page fast on mobile data),
+// no PIN, no payment QR, no sales data.
+function buildPublicMenuDoc(){
+  const s = state.settings;
+  return {
+    v: 1,
+    shopName: s.shopName || "",
+    ordersOpen: !!s.customerOrdersOpen,
+    drinkOptions: s.drinkOptions || "",
+    drinkOptionsPrompt: s.drinkOptionsPrompt !== false,
+    categories: state.menu.map(cat=>({
+      id: cat.id,
+      name: cat.name,
+      beverage: isBeverageCategory(cat),
+      items: cat.items.map(it=>{
+        const o = { id: it.id, name: it.name, price: it.price, available: it.available !== false };
+        if(hasColdPrice(it)) o.coldPrice = it.coldPrice;
+        if(isCombo(it)) o.combo = comboContentsLabel(resolveComboContents(it), 1);
+        return o;
+      })
+    }))
+  };
+}
+function publishPublicMenu(){
+  const ref = custPublicRef();
+  if(!ref) return;
+  ref.set(Object.assign(buildPublicMenuDoc(), { updatedAt: firebase.firestore.FieldValue.serverTimestamp() })).then(()=>{
+    if(custPublishError){ custPublishError = ""; renderCustomerOrderStatus(); }
+  }).catch(err=>{
+    custPublishError = (err && err.message) ? err.message : "发布失败";
+    renderCustomerOrderStatus();
+  });
+}
+
+// Link printed on the QR / written to the NFC sticker. Only the (public) Firebase project id + web API
+// key are needed to reach Firestore; the table number is optional (no table = the take-away link).
+function customerLink(table){
+  const cfg = loadCloudConfig();
+  if(!cfg || !cfg.enabled || !state.settings.publicId) return null;
+  let c; try{ c = JSON.parse(cfg.configText); }catch(e){ return null; }
+  if(!c || !c.projectId || !c.apiKey) return null;
+  const base = location.origin + location.pathname.replace(/[^/]*$/, "") + "order.html";
+  return base + "?p=" + encodeURIComponent(c.projectId) + "&k=" + encodeURIComponent(c.apiKey) + "&s=" + encodeURIComponent(state.settings.publicId)
+    + (table ? "&t=" + encodeURIComponent(table) : "");
+}
+
+// Re-price an inbox order from THIS menu. Returns cart lines ready for a held order.
+function resolveCustomerOrder(o){
+  const lines = [], problems = [];
+  const groups = drinkOptionGroups();
+  (o.items || []).slice(0, 30).forEach(ci=>{
+    const qty = Math.max(1, Math.min(20, parseInt(ci.qty, 10) || 1));
+    const item = findMenuItemById(ci.id);
+    if(!item){ problems.push(`「${ci.name}」已经不在菜单里`); return; }
+    if(item.available === false){ problems.push(`「${item.name}」已售罄`); return; }
+    const cat = findCategoryOfItem(item.id);
+    const isBev = !!(cat && isBeverageCategory(cat));
+    let optsText = "", extra = 0;
+    if(isBev && !isCombo(item)){
+      const picked = [];
+      (Array.isArray(ci.options) ? ci.options : []).forEach(p=>{
+        const g = groups.find(x=>x.name === p.g);
+        const ch = g && g.choices.find(c=>c.label === p.l);
+        if(ch){ picked.push(ch.label); extra += choiceExtra(item, ch); }
+      });
+      optsText = picked.join(" · "); extra = round2(extra);
+    }
+    const key = optsText ? item.id + "#" + optsText : item.id;
+    const note = String(ci.note || "").slice(0, 40);
+    const same = lines.find(l=>l.itemId === key);
+    if(same){
+      same.qty = Math.min(20, same.qty + qty);
+      if(note && !same.note.split(" / ").includes(note)) same.note = same.note ? same.note + " / " + note : note;
+    }else{
+      lines.push({ itemId: key, name: item.name, price: round2(item.price + extra), optionExtra: extra, qty, note, comboContents: resolveComboContents(item), options: optsText, isBeverage: isBev });
+    }
+  });
+  const subtotal = round2(lines.reduce((s,l)=>s + l.price*l.qty, 0));
+  return { lines, problems, subtotal };
+}
+
+function customerOrderLabel(o){
+  return o.orderType === "dinein" ? "桌 " + o.table : "外带 " + (o.name || "").trim();
+}
+// Adds the lines to the held order of the same table / same take-away name, or starts a new one — so a
+// table that orders three times ends up with ONE bill to settle.
+function addCustomerLinesToHeld(o, lines){
+  const label = customerOrderLabel(o);
+  const isDine = o.orderType === "dinein";
+  let held = heldOrders.find(h=> isDine ? (h.orderType === "dinein" && String(h.table) === String(o.table)) : (h.orderType === "takeaway" && h.label === label));
+  if(!held){
+    held = { id: uid(), label, orderType: isDine ? "dinein" : "takeaway", table: isDine ? String(o.table) : null, cart: [], discount: null, heldAt: Date.now() };
+    heldOrders.push(held);
+  }
+  lines.forEach(l=>{
+    const ex = held.cart.find(c=>c.itemId === l.itemId);
+    if(ex){
+      ex.qty += l.qty;
+      if(l.note && !(ex.note || "").split(" / ").includes(l.note)) ex.note = ex.note ? ex.note + " / " + l.note : l.note;
+    }else{
+      held.cart.push(Object.assign({}, l));
+    }
+  });
+  saveHeldOrders();
+  renderHeldBadge();
+  return held;
+}
+
+function pendingCustomerOrders(){
+  const handled = custHandledSet();
+  return [...custInbox.entries()]
+    .filter(([id])=> !custStatus.has(id) && !handled.has(id))
+    .map(([id, o])=> Object.assign({ id }, o))
+    .sort((a,b)=> custTime(a) - custTime(b));
+}
+function custTime(o){
+  const t = o.createdAt;
+  return t && t.toMillis ? t.toMillis() : (t instanceof Date ? t.getTime() : 0);
+}
+
+function playDing(){
+  try{
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    [880, 1175].forEach((f, i)=>{
+      const osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.frequency.value = f; osc.connect(g); g.connect(ctx.destination);
+      const t = ctx.currentTime + i*0.18;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.4, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+      osc.start(t); osc.stop(t + 0.18);
+    });
+  }catch(e){}
+  try{ if(navigator.vibrate) navigator.vibrate([200, 100, 200]); }catch(e){}
+}
+
+function onCustomerOrdersChanged(){
+  if(!(custInboxReady && custStatusReady)) return;
+  const pending = pendingCustomerOrders();
+  const fresh = pending.filter(o=>!custSeen.has(o.id));
+  fresh.forEach(o=>custSeen.add(o.id));
+  if(fresh.length){
+    playDing();
+    alertToast(`📲 新的顾客点单: ${fresh.map(o=>customerOrderLabel(o)).join("、")}`);
+  }
+  renderCustomerOrdersUI();
+}
+
+function stopCustomerOrderListeners(){
+  if(custInboxUnsub){ custInboxUnsub(); custInboxUnsub = null; }
+  if(custStatusUnsub){ custStatusUnsub(); custStatusUnsub = null; }
+  custInbox = new Map(); custStatus = new Map();
+  custInboxReady = custStatusReady = false;
+  custStarted = "";
+}
+// (Re)starts the two listeners when the cloud connection / public code / on-off switch changed.
+function ensureCustomerOrderSetup(){
+  const s = state.settings;
+  const wanted = (cloudDb && s.publicId) ? [s.publicId, s.customerOrdersOpen ? "1" : "0"].join("|") : "";
+  if(wanted === custStarted && (custInboxUnsub || !wanted)){ renderCustomerOrdersUI(); return; }
+  stopCustomerOrderListeners();
+  renderCustomerOrdersUI();
+  if(!wanted) return;
+  custStarted = wanted;
+  publishPublicMenu();
+  if(!s.customerOrdersOpen) return;
+  const since = new Date(Date.now() - 24*3600*1000);
+  const ref = custPublicRef();
+  custInboxUnsub = ref.collection("inbox").where("createdAt", ">", since).onSnapshot(snap=>{
+    custInbox = new Map(snap.docs.map(d=>[d.id, d.data()]));
+    custInboxReady = true;
+    onCustomerOrdersChanged();
+  }, err=>{ custPublishError = "读取顾客点单失败: " + (err && err.message ? err.message : err); renderCustomerOrderStatus(); });
+  custStatusUnsub = ref.collection("status").where("at", ">", since).onSnapshot(snap=>{
+    custStatus = new Map(snap.docs.map(d=>[d.id, d.data()]));
+    custStatusReady = true;
+    onCustomerOrdersChanged();
+  }, ()=>{});
+}
+
+function renderCustomerOrdersUI(){
+  const s = state.settings;
+  const btn = document.getElementById("btnCustomerOrders");
+  const badge = document.getElementById("custCountBadge");
+  if(!btn) return;
+  const on = !!(s.customerOrdersOpen && s.publicId);
+  btn.classList.toggle("hidden", !on);
+  const n = on ? pendingCustomerOrders().length : 0;
+  badge.textContent = n;
+  badge.classList.toggle("hidden", n === 0);
+  btn.classList.toggle("cust-alert", n > 0);
+  if(!document.getElementById("customerOrdersModal").classList.contains("hidden")) renderCustomerOrdersList();
+}
+
+function renderCustomerOrdersList(){
+  const list = document.getElementById("customerOrdersList");
+  const pending = pendingCustomerOrders();
+  if(!pending.length){
+    list.innerHTML = `<div class="cart-empty">目前没有待处理的顾客点单</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  pending.forEach(o=>{
+    const r = resolveCustomerOrder(o);
+    const t = custTime(o) ? new Date(custTime(o)).toLocaleTimeString("en-MY", { hour:"2-digit", minute:"2-digit" }) : "";
+    const row = document.createElement("div");
+    row.className = "cust-order";
+    row.innerHTML = `
+      <div class="co-head"><span class="co-code">${escapeHtml(o.code || "")}</span><span class="co-where">${escapeHtml(customerOrderLabel(o))}</span><span class="co-time">${t}</span></div>
+      <div class="co-lines">${r.lines.map(l=>`<div><b>${escapeHtml(l.name)}</b>${l.options ? ` <span class="co-opt">${escapeHtml(l.options)}</span>` : ""} × ${l.qty}${l.note ? ` <i>(${escapeHtml(l.note)})</i>` : ""} <span class="co-price">${fmt(l.price * l.qty)}</span></div>`).join("")}</div>
+      ${o.note ? `<div class="co-note">💬 ${escapeHtml(o.note)}</div>` : ""}
+      ${r.problems.length ? `<div class="co-problem">⚠️ ${r.problems.map(escapeHtml).join("<br>⚠️ ")}</div>` : ""}
+      <div class="co-sum">小计 ${fmt(r.subtotal)}<small>(按店里的菜单重新算价)</small></div>
+      <div class="co-actions">
+        <button class="co-accept" data-act="accept">✅ 接受</button>
+        <button class="co-print" data-act="print">🖨 接受并打印</button>
+        <button class="co-reject" data-act="reject">✖ 拒绝</button>
+      </div>`;
+    row.querySelector('[data-act="accept"]').onclick = ()=> acceptCustomerOrder(o.id, false);
+    row.querySelector('[data-act="print"]').onclick = ()=> acceptCustomerOrder(o.id, true);
+    row.querySelector('[data-act="reject"]').onclick = ()=> rejectCustomerOrder(o.id);
+    list.appendChild(row);
+  });
+}
+
+function markCustomerOrder(id, status, label){
+  custMarkHandledLocal(id);
+  const ref = custPublicRef();
+  if(ref){
+    ref.collection("status").doc(id).set({ status, at: firebase.firestore.FieldValue.serverTimestamp(), label: label || "" }).catch(()=>{});
+  }
+  renderCustomerOrdersUI();
+}
+function acceptCustomerOrder(id, doPrint){
+  const o = pendingCustomerOrders().find(x=>x.id === id);
+  if(!o) return;
+  const r = resolveCustomerOrder(o);
+  if(!r.lines.length){
+    alertToast("这张单里没有可以加入的菜品(已售罄或不在菜单),请拒绝,或请顾客重点");
+    return;
+  }
+  if(r.problems.length && !confirm(`以下菜品无法加入:\n${r.problems.join("\n")}\n\n只接受其余的菜品吗?`)) return;
+  const held = addCustomerLinesToHeld(o, r.lines);
+  markCustomerOrder(id, "accepted", held.label);
+  if(doPrint) printTicketsSequence({ orderNo: o.code + (o.orderType === "takeaway" && o.name ? " " + o.name : ""), time: new Date().toLocaleTimeString("en-MY", { hour:"2-digit", minute:"2-digit" }), items: r.lines.map(l=>({ name: l.name, qty: l.qty, options: l.options, note: l.note, isBeverage: l.isBeverage, comboContents: l.comboContents })), orderType: o.orderType, table: o.orderType === "dinein" ? o.table : null });
+  alertToast(`已接受,加入挂单「${held.label}」`);
+}
+function rejectCustomerOrder(id){
+  const o = pendingCustomerOrders().find(x=>x.id === id);
+  if(!o) return;
+  if(!confirm(`拒绝 ${customerOrderLabel(o)} 的点单?顾客的手机会显示「未能接单」。`)) return;
+  markCustomerOrder(id, "rejected", customerOrderLabel(o));
+}
+
+// ---- settings: links / QR sheet / NFC ----
+function renderCustomerOrderStatus(){
+  const el = document.getElementById("customerOrderStatus");
+  if(!el) return;
+  const s = state.settings;
+  const cfg = loadCloudConfig();
+  if(custPublishError){ el.textContent = "⚠️ " + custPublishError + " — 请确认 Firestore 规则已按说明设定"; el.style.color = "var(--danger)"; return; }
+  el.style.color = "var(--text-mute)";
+  if(!cfg || !cfg.enabled) el.textContent = "需要先连接上面的云端同步,才能开放顾客点单。";
+  else if(s.customerOrdersOpen) el.textContent = "✅ 已开放。顾客扫码送出的单,会出现在顶部的「📲 顾客点单」。";
+  else el.textContent = "目前关闭,顾客扫码会看到「暂时不接受点单」。";
+}
+
+let qrLibPromise = null;
+function loadQrLib(){
+  if(window.qrcode) return Promise.resolve(window.qrcode);
+  if(qrLibPromise) return qrLibPromise;
+  qrLibPromise = new Promise((resolve, reject)=>{
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js";
+    s.onload = ()=> resolve(window.qrcode);
+    s.onerror = ()=>{ qrLibPromise = null; reject(new Error("二维码组件载入失败,请检查网络后再试")); };
+    document.head.appendChild(s);
+  });
+  return qrLibPromise;
+}
+function qrDataUrl(text){
+  const q = window.qrcode(0, "M");
+  q.addData(text); q.make();
+  return q.createDataURL(6, 2);
+}
+
+function customerTargets(){
+  return tableOptions().map(t=>({ table: t, label: "桌 " + t, en: "Table " + t })).concat([{ table: "", label: "外带", en: "Take Away" }]);
+}
+function openCustomerLinksModal(){
+  const list = document.getElementById("customerLinksList");
+  list.innerHTML = "";
+  if(!customerLink("1")){
+    list.innerHTML = `<div class="cart-empty">请先连接云端同步并勾选「开放顾客扫码点单」</div>`;
+    showModal("customerLinksModal");
+    return;
+  }
+  customerTargets().forEach(t=>{
+    const url = customerLink(t.table);
+    const row = document.createElement("div");
+    row.className = "cl-row";
+    row.innerHTML = `<div class="cl-label"><b>${escapeHtml(t.label)}</b><small>${url.length} 字${url.length > 125 ? " · NFC 请用 NTAG215" : ""}</small></div>
+      <div class="cl-btns"><button data-a="copy">复制链接</button><button data-a="test">试开</button><button data-a="nfc">📡 写入 NFC</button></div>`;
+    row.querySelector('[data-a="copy"]').onclick = ()=>{
+      (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(()=> alertToast("已复制 " + t.label + " 的链接"), ()=> prompt("复制这条链接:", url));
+    };
+    row.querySelector('[data-a="test"]').onclick = ()=> window.open(url, "_blank");
+    row.querySelector('[data-a="nfc"]').onclick = ()=> writeNfcTag(url, t.label);
+    list.appendChild(row);
+  });
+  showModal("customerLinksModal");
+}
+// Web NFC (Chrome on Android only). The tag stores just the link; phones open it when tapped.
+async function writeNfcTag(url, label){
+  if(!("NDEFReader" in window)){
+    alertToast("这台设备/浏览器不能写 NFC(需要 Android 的 Chrome)。可复制链接,用手机的「NFC Tools」App 写入。");
+    return;
+  }
+  try{
+    const w = new NDEFReader();
+    alertToast(`请把空白 NFC 贴纸靠近 TABLET 背面,写入「${label}」…`);
+    await w.write({ records: [{ recordType: "url", data: url }] });
+    alertToast(`✅ 已写入 ${label}`);
+  }catch(err){
+    alertToast("写入失败: " + (err && err.message ? err.message : err) + "(贴纸容量不够时请换 NTAG215)");
+  }
+}
+async function printCustomerQrSheet(){
+  let w = null;
+  try{
+    await loadQrLib();
+    w = window.open("", "_blank");
+    if(!w){ alertToast("请允许弹出窗口后再按一次"); return; }
+    const shop = escapeHtml(state.settings.shopName || "");
+    const cards = customerTargets().map(t=>{
+      const url = customerLink(t.table);
+      return `<div class="card"><div class="shop">${shop}</div><div class="where">${escapeHtml(t.label)}<small>${escapeHtml(t.en)}</small></div><img src="${qrDataUrl(url)}" alt=""><div class="how">扫码点餐 · Scan to order<br>也可用手机碰一下 NFC 贴纸 · or tap the NFC sticker</div></div>`;
+    }).join("");
+    w.document.write(`<!doctype html><meta charset="utf-8"><title>桌号二维码</title><style>
+      body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;margin:0;padding:16px;}
+      .bar{margin-bottom:12px;} .bar button{padding:10px 18px;font-size:16px;}
+      .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;}
+      .card{border:2px dashed #999;border-radius:14px;padding:14px;text-align:center;break-inside:avoid;}
+      .shop{font-weight:700;color:#555;} .where{font-size:34px;font-weight:900;margin:6px 0;} .where small{display:block;font-size:14px;color:#777;font-weight:600;}
+      img{width:200px;height:200px;image-rendering:pixelated;} .how{font-size:12px;color:#555;line-height:1.5;margin-top:6px;}
+      @media print{.bar{display:none;} body{padding:0;}}
+    </style><div class="bar"><button onclick="window.print()">🖨 打印 Print</button></div><div class="grid">${cards}</div>`);
+    w.document.close();
+  }catch(err){
+    if(w) try{ w.close(); }catch(e){}
+    alertToast(err && err.message ? err.message : "无法产生二维码");
+  }
+}
+const CUSTOMER_RULES_TEXT = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n\n    // The POS and the sales dashboard have no login: the secret shop code is their key.\n    // (Customers never see this code - their QR/NFC link only carries the separate public code below.)\n    match /posShops/{shopId}/{document=**} {\n      allow read, write: if true;\n    }\n\n    // Customer ordering. The public code in the QR/NFC link only opens this branch.\n    match /publicShops/{publicId} {\n      // menu published by the POS (read by customers)\n      allow read: if true;\n      allow create, update: if request.resource.data.keys().hasOnly(\n        ['v', 'shopName', 'ordersOpen', 'drinkOptions', 'drinkOptionsPrompt', 'categories', 'updatedAt']);\n\n      // orders sent by customers: create-only, they can never edit or delete anything\n      match /inbox/{orderId} {\n        allow read: if true;\n        allow create: if request.resource.data.keys().hasOnly(\n            ['code', 'orderType', 'table', 'name', 'note', 'items', 'subtotal', 'createdAt', 'expireAt', 'clientId'])\n          && request.resource.data.items is list\n          && request.resource.data.items.size() > 0\n          && request.resource.data.items.size() <= 30\n          && request.resource.data.createdAt == request.time;\n        allow update, delete: if false;\n      }\n\n      // accepted / rejected, written by the POS and read by the customer's phone\n      match /status/{orderId} {\n        allow read: if true;\n        allow create, update: if request.resource.data.keys().hasOnly(['status', 'at', 'label'])\n          && request.resource.data.status in ['accepted', 'rejected'];\n        allow delete: if false;\n      }\n    }\n  }\n}\n";
+function copyCustomerRules(){
+  const done = ()=> alertToast("已复制。到 Firebase 控制台 → Firestore → 规则,整段贴上并「发布」");
+  if(navigator.clipboard) navigator.clipboard.writeText(CUSTOMER_RULES_TEXT).then(done, ()=> prompt("复制这段规则:", CUSTOMER_RULES_TEXT));
+  else prompt("复制这段规则:", CUSTOMER_RULES_TEXT);
+}
+
 function stopCloudSync(){
   if(!confirm("确定断开云端同步?本机数据不会被删除。")) return;
   if(cloudUnsub){ cloudUnsub(); cloudUnsub = null; }
   if(typeof firebase !== "undefined" && firebase.apps && firebase.apps.length){
     firebase.apps.slice().forEach(a=>{ try{ a.delete(); }catch(e){} });
   }
+  stopCustomerOrderListeners();
   cloudDb = null;
   cloudLastError = null;
   if(cloudPushTimer){ clearTimeout(cloudPushTimer); cloudPushTimer = null; }
@@ -2248,6 +2647,7 @@ function pushCloudState(){
   cloudDocRef(cfg.shopId).set(cloudSyncableSnapshot(), {merge:true}).then(()=>{
     cloudPushInFlight = false;
     cloudLastError = null;
+    publishPublicMenu();
     // Re-read the config rather than reuse the `cfg` captured before this async write started —
     // if the user disconnected while the write was in flight, this must not resurrect it.
     const freshCfg = loadCloudConfig();
@@ -4020,6 +4420,22 @@ function init(){
   document.getElementById("btnRemoveOnlineOrderQr").onclick = removeOnlineOrderQrFile;
   document.getElementById("btnAddCategory").onclick = ()=> addCategory(false);
   document.getElementById("btnAddBeverageCategory").onclick = addBeverageCategory;
+  document.getElementById("inputCustomerOrdersOpen").onchange = (e)=>{
+    if(e.target.checked){
+      const cfg = loadCloudConfig();
+      if(!cfg || !cfg.enabled){ e.target.checked = false; alertToast("请先连接云端同步(上面的步骤),再开放顾客点单"); return; }
+      if(!state.settings.publicId) state.settings.publicId = genShopId().slice(0, 12);
+    }
+    state.settings.customerOrdersOpen = e.target.checked;
+    saveState();
+    ensureCustomerOrderSetup();
+    publishPublicMenu();
+    renderCustomerOrderStatus();
+  };
+  document.getElementById("btnCustomerLinks").onclick = openCustomerLinksModal;
+  document.getElementById("btnPrintQrSheet").onclick = printCustomerQrSheet;
+  document.getElementById("btnCopyRules").onclick = copyCustomerRules;
+  document.getElementById("btnCustomerOrders").onclick = ()=>{ renderCustomerOrdersList(); showModal("customerOrdersModal"); };
   document.getElementById("btnImportMenu").onclick = openMenuImportModal;
   document.getElementById("importFileInput").addEventListener("change", e=> handleMenuImportFile(e.target.files[0]));
   document.getElementById("importPasteBox").addEventListener("input", e=>{

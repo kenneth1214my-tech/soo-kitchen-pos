@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#d9480f">
+<title>扫码点餐 Scan to Order</title>
+<link rel="stylesheet" href="order.css?v=202611150200">
+</head>
+<body>
+
+<header id="top">
+  <div class="top-main">
+    <div id="shopTitle" class="shop-title">…</div>
+    <div id="whereBadge" class="where-badge"></div>
+  </div>
+  <nav id="cats" class="cats"></nav>
+</header>
+
+<main id="main">
+  <div id="msg" class="msg hidden"></div>
+  <div id="items" class="items"></div>
+</main>
+
+<div id="cartBar" class="cart-bar hidden">
+  <button id="btnOpenCart" class="cart-bar-btn">
+    <span class="cb-count" id="cbCount">0</span>
+    <span class="cb-label">查看订单 View order</span>
+    <span class="cb-total" id="cbTotal">RM0.00</span>
+  </button>
+</div>
+
+<!-- drink options -->
+<div id="optSheet" class="sheet hidden">
+  <div class="sheet-box">
+    <div class="sheet-head"><span id="optTitle"></span><button class="x" data-close="optSheet">✕</button></div>
+    <div id="optGroups" class="opt-groups"></div>
+    <div class="sheet-foot"><button id="btnAddOpt" class="primary">加入订单 Add</button></div>
+  </div>
+</div>
+
+<!-- cart -->
+<div id="cartSheet" class="sheet hidden">
+  <div class="sheet-box">
+    <div class="sheet-head"><span>你的订单 Your order</span><button class="x" data-close="cartSheet">✕</button></div>
+    <div id="cartLines" class="cart-lines"></div>
+    <div id="nameWrap" class="field hidden">
+      <label for="custName">你的名字 Your name <b>*</b></label>
+      <input id="custName" maxlength="20" placeholder="例如:阿明 / Ming" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="custNote">给店家的话 Note (选填 optional)</label>
+      <input id="custNote" maxlength="80" placeholder="例如:一起上 / 不要香菜" autocomplete="off">
+    </div>
+    <div class="sum"><span>小计 Subtotal</span><b id="cartSub">RM0.00</b></div>
+    <p class="fine">💳 吃完后到柜台付款 · Pay at the counter after your meal.<br>最终金额以柜台结账为准(含服务税/凑整) · Final amount is confirmed at the counter.</p>
+    <div class="sheet-foot"><button id="btnSubmit" class="primary">送出点单 Send order</button></div>
+  </div>
+</div>
+
+<!-- sent -->
+<div id="doneSheet" class="sheet hidden">
+  <div class="sheet-box center">
+    <div class="done-icon" id="doneIcon">📨</div>
+    <div class="done-title" id="doneTitle">已送出 Sent</div>
+    <div class="done-code" id="doneCode"></div>
+    <p class="done-status" id="doneStatus">等待店员确认… Waiting for the staff to confirm…</p>
+    <div id="doneItems" class="done-items"></div>
+    <p class="fine">💳 吃完后到柜台付款 · Pay at the counter after your meal.</p>
+    <div class="sheet-foot"><button id="btnMore" class="primary">再点一单 Order more</button></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="order.js?v=202611150200"></script>
+</body>
+</html>

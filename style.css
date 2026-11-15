@@ -463,6 +463,32 @@ input{font-family:inherit;}
 
 /* Promotions */
 .promo-presets button{background:#fff4ea;border-color:var(--brand);color:var(--brand-dark);}
+/* customer QR / NFC ordering */
+@keyframes custPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,255,255,.7);}50%{box-shadow:0 0 0 8px rgba(255,255,255,0);}}
+.icon-btn.cust-alert{background:#fff;color:var(--brand-dark);animation:custPulse 1.4s infinite;}
+.cust-order{border:1px solid var(--border);border-radius:12px;margin:10px 18px;padding:12px;background:#fff;}
+.co-head{display:flex;align-items:center;gap:10px;}
+.co-code{font-size:22px;font-weight:900;letter-spacing:2px;color:var(--brand-dark);}
+.co-where{flex:1;font-weight:800;font-size:17px;}
+.co-time{color:var(--text-mute);font-size:13px;}
+.co-lines{margin-top:8px;font-size:15px;line-height:1.7;}
+.co-opt{color:var(--brand-dark);font-weight:700;}
+.co-price{float:right;color:var(--text-mute);}
+.co-note{margin-top:6px;padding:6px 10px;background:#fff8e1;border-radius:8px;font-size:14px;}
+.co-problem{margin-top:6px;padding:6px 10px;background:#fdecea;color:var(--danger);border-radius:8px;font-size:13px;}
+.co-sum{margin-top:8px;font-weight:800;}
+.co-sum small{font-weight:600;color:var(--text-mute);margin-left:8px;}
+.co-actions{display:flex;gap:8px;margin-top:10px;}
+.co-actions button{flex:1;padding:13px 6px;border-radius:10px;border:1px solid var(--border);background:#fff;font-size:14px;font-weight:700;}
+.co-actions .co-accept{background:var(--brand);border-color:var(--brand);color:#fff;}
+.co-actions .co-print{background:#1f2937;border-color:#1f2937;color:#fff;}
+.co-actions .co-reject{color:var(--danger);}
+.cl-list{padding:8px 18px 0;}
+.cl-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px dashed var(--border);flex-wrap:wrap;}
+.cl-label{flex:1;min-width:110px;}
+.cl-label small{display:block;color:var(--text-mute);font-size:11px;}
+.cl-btns{display:flex;gap:6px;flex-wrap:wrap;}
+.cl-btns button{padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13px;}
 .promo-presets button.active{background:var(--brand);color:#fff;}
 .pc-quick{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px;font-size:13px;color:var(--text-mute);}
 .pc-chips{display:flex;gap:6px;flex-wrap:wrap;}

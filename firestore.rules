@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // The POS and the sales dashboard have no login: the secret shop code is their key.
+    // (Customers never see this code - their QR/NFC link only carries the separate public code below.)
+    match /posShops/{shopId}/{document=**} {
+      allow read, write: if true;
+    }
+
+    // Customer ordering. The public code in the QR/NFC link only opens this branch.
+    match /publicShops/{publicId} {
+      // menu published by the POS (read by customers)
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasOnly(
+        ['v', 'shopName', 'ordersOpen', 'drinkOptions', 'drinkOptionsPrompt', 'categories', 'updatedAt']);
+
+      // orders sent by customers: create-only, they can never edit or delete anything
+      match /inbox/{orderId} {
+        allow read: if true;
+        allow create: if request.resource.data.keys().hasOnly(
+            ['code', 'orderType', 'table', 'name', 'note', 'items', 'subtotal', 'createdAt', 'expireAt', 'clientId'])
+          && request.resource.data.items is list
+          && request.resource.data.items.size() > 0
+          && request.resource.data.items.size() <= 30
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      // accepted / rejected, written by the POS and read by the customer's phone
+      match /status/{orderId} {
+        allow read: if true;
+        allow create, update: if request.resource.data.keys().hasOnly(['status', 'at', 'label'])
+          && request.resource.data.status in ['accepted', 'rejected'];
+        allow delete: if false;
+      }
+    }
+  }
+}
