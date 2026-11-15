@@ -567,9 +567,12 @@ input{font-family:inherit;}
   border:1px solid var(--border);border-radius:12px;margin-bottom:14px;overflow:hidden;
 }
 .cat-editor-head{
-  display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg);
+  display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg);flex-wrap:wrap;
 }
-.cat-editor-head input.cat-name-input{flex:1;padding:8px;border:1px solid var(--border);border-radius:8px;font-weight:700;}
+.cat-editor-head input.cat-name-input{flex:1;min-width:120px;padding:8px;border:1px solid var(--border);border-radius:8px;font-weight:700;}
+.cat-editor.is-hidden{opacity:.6;background:repeating-linear-gradient(135deg,transparent 0 10px,rgba(0,0,0,.03) 10px 20px);}
+.cat-editor.is-hidden .cat-name-input{text-decoration:line-through;}
+.cat-editor.is-hidden .hide-toggle{color:var(--danger);}
 .bev-toggle{display:flex;align-items:center;gap:4px;font-size:13px;font-weight:700;white-space:nowrap;color:var(--text-mute);}
 .cat-editor-head button{background:none;border:none;font-size:16px;padding:4px 8px;}
 .item-editor-list{padding:8px 12px;}

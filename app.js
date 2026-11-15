@@ -240,10 +240,18 @@ function peekOrderNo(){
 }
 
 // ---------- Rendering: menu ----------
+// A category can be hidden (cat.hidden) in 菜单管理: it disappears from the till and from the customer
+// page, but keeps its dishes and prices so it can be switched back on any time.
+function visibleCategories(){ return state.menu.filter(c=>!c.hidden); }
+function ensureActiveCategory(){
+  const vis = visibleCategories();
+  if(!vis.some(c=>c.id===activeCategory)) activeCategory = vis[0] ? vis[0].id : null;
+}
 function renderCategoryTabs(){
   const nav = document.getElementById("categoryTabs");
   nav.innerHTML = "";
-  state.menu.forEach(cat=>{
+  ensureActiveCategory();
+  visibleCategories().forEach(cat=>{
     const btn = document.createElement("button");
     btn.className = "cat-tab" + (cat.id===activeCategory?" active":"");
     btn.textContent = cat.name;
@@ -273,11 +281,12 @@ function initCategorySwipe(){
     // Require a clearly horizontal, deliberate swipe — not a tap (near-zero movement) and not a
     // vertical scroll of a long item list.
     if(Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy)*1.5) return;
-    const idx = state.menu.findIndex(c=>c.id===activeCategory);
+    const vis = visibleCategories();
+    const idx = vis.findIndex(c=>c.id===activeCategory);
     if(idx<0) return;
     const nextIdx = dx<0 ? idx+1 : idx-1;
-    if(nextIdx<0 || nextIdx>=state.menu.length) return; // no wraparound past the first/last tab
-    activeCategory = state.menu[nextIdx].id;
+    if(nextIdx<0 || nextIdx>=vis.length) return; // no wraparound past the first/last tab
+    activeCategory = vis[nextIdx].id;
     renderCategoryTabs();
     renderItemGrid();
   });
@@ -329,8 +338,9 @@ function findMenuItemById(id){
 function renderItemGrid(){
   const grid = document.getElementById("itemGrid");
   grid.innerHTML = "";
+  ensureActiveCategory();
   const cat = state.menu.find(c=>c.id===activeCategory);
-  if(!cat) return;
+  if(!cat || cat.hidden) return;
   cat.items.forEach(item=>{
     const card = document.createElement("div");
     card.className = "item-card" + (item.available===false ? " unavailable" : "");
@@ -2255,7 +2265,7 @@ function buildPublicMenuDoc(){
     ordersOpen: !!s.customerOrdersOpen,
     drinkOptions: s.drinkOptions || "",
     drinkOptionsPrompt: s.drinkOptionsPrompt !== false,
-    categories: state.menu.map(cat=>({
+    categories: visibleCategories().map(cat=>({
       id: cat.id,
       name: cat.name,
       beverage: isBeverageCategory(cat),
@@ -2277,7 +2287,7 @@ let custPhotoNote = "", custPhotoFail = null;
 function itemPhotoRev(){
   let h = 5381, n = 0;
   const mix = s=>{ for(let i=0;i<s.length;i++) h = ((h*33) ^ s.charCodeAt(i)) >>> 0; };
-  state.menu.forEach(c=>c.items.forEach(it=>{ if(it.image){ mix(String(it.id)); mix(it.image); n++; } }));
+  visibleCategories().forEach(c=>c.items.forEach(it=>{ if(it.image){ mix(String(it.id)); mix(it.image); n++; } }));
   return n ? "t1-" + n + "-" + h.toString(36) : "";
 }
 async function makeThumb(dataUrl){
@@ -2298,7 +2308,7 @@ async function publishPublicPhotos(ref, rev){
   if(saved && saved.pid === pid && saved.rev === rev) return true;
   if(custPhotoFail && custPhotoFail.rev === rev && Date.now() - custPhotoFail.at < 60000) throw new Error("retry later");
   const chunks = []; let cur = {}, size = 0;
-  for(const cat of state.menu) for(const it of cat.items){
+  for(const cat of visibleCategories()) for(const it of cat.items){
     if(!it.image) continue;
     let t; try{ t = await makeThumb(it.image); }catch(e){ continue; }
     if(size > 0 && size + t.length > PHOTO_CHUNK_CHARS){ chunks.push(cur); cur = {}; size = 0; }
@@ -2359,7 +2369,8 @@ function resolveCustomerOrder(o){
   (o.items || []).slice(0, 30).forEach(ci=>{
     const qty = Math.max(1, Math.min(20, parseInt(ci.qty, 10) || 1));
     const item = findMenuItemById(ci.id);
-    if(!item){ problems.push(`「${ci.name}」已经不在菜单里`); return; }
+    const itemCat = item && findCategoryOfItem(item.id);
+    if(!item || (itemCat && itemCat.hidden)){ problems.push(`「${ci.name}」已经不在菜单里`); return; }
     if(item.available === false){ problems.push(`「${item.name}」已售罄`); return; }
     const cat = findCategoryOfItem(item.id);
     const isBev = !!(cat && isBeverageCategory(cat));
@@ -3653,10 +3664,11 @@ function renderMenuEditor(){
   container.innerHTML = "";
   state.menu.forEach(cat=>{
     const box = document.createElement("div");
-    box.className = "cat-editor";
+    box.className = "cat-editor" + (cat.hidden ? " is-hidden" : "");
     box.innerHTML = `
       <div class="cat-editor-head">
         <input type="text" value="${escapeHtml(cat.name)}" data-cat="${cat.id}" class="cat-name-input">
+        <label class="bev-toggle hide-toggle" title="隐藏后,点餐页和顾客扫码页都看不到这个分类;菜品和价格会保留,随时可以取消隐藏"><input type="checkbox" class="cat-hide-input" ${cat.hidden?"checked":""}> 🙈隐藏</label>
         <label class="bev-toggle" title="饮料类:点餐时会问热/冷等选项,并算进饮料统计和饮料单"><input type="checkbox" class="cat-bev-input" ${isBeverageCategory(cat)?"checked":""}> 🥤饮料</label>
         <button data-act="delcat" data-cat="${cat.id}">🗑</button>
       </div>
@@ -3779,6 +3791,11 @@ function renderMenuEditor(){
       saveState(); renderMenuEditor(); renderItemGridIfNeeded();
     };
     box.querySelector(".cat-bev-input").onchange = (e)=>{ cat.beverage = e.target.checked; saveState(); };
+    box.querySelector(".cat-hide-input").onchange = (e)=>{
+      if(e.target.checked) cat.hidden = true; else delete cat.hidden;
+      saveState(); renderMenuEditor(); renderCategoryTabs(); renderItemGrid();
+      alertToast(cat.hidden ? `「${cat.name}」已隐藏(点餐页和顾客页都看不到)` : `「${cat.name}」已重新显示`);
+    };
     box.querySelector(".cat-name-input").onchange = (e)=>{
       cat.name = e.target.value.trim() || cat.name;
       saveState(); renderMenuEditor(); renderCategoryTabs();
