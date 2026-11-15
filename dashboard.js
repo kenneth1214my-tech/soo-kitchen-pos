@@ -112,7 +112,19 @@ function computeStats(orders){
 
   const dineInRevenue = valid.filter(o=>o.orderType==="dinein").reduce((s,o)=>s+(o.total||0),0);
   const takeawayRevenue = valid.filter(o=>o.orderType==="takeaway").reduce((s,o)=>s+(o.total||0),0);
-  return { beverageCups, beverageRevenue, dineInRevenue, takeawayRevenue, totalRevenue, cashRevenue, qrRevenue, avg, orderCount: valid.length, dayRows, maxDay, topItems };
+  // Sales per staff member (orders rung up before staff login existed are grouped as 未登记).
+  const staffMap = new Map();
+  valid.forEach(o=>{
+    const key = o.staffId || "";
+    if(!staffMap.has(key)) staffMap.set(key, { staffId:key, name:o.staffName || "未登记", orderCount:0, revenue:0, cups:0 });
+    const r = staffMap.get(key); r.orderCount++; r.revenue += o.total||0;
+  });
+  itemOrders.forEach(o=>{
+    const r = staffMap.get(o.staffId || "");
+    if(r) (o.items||[]).forEach(it=>{ if(it.isBeverage) r.cups += it.qty||0; });
+  });
+  const staffRows = [...staffMap.values()].sort((a,b)=>b.revenue-a.revenue);
+  return { beverageCups, beverageRevenue, dineInRevenue, takeawayRevenue, totalRevenue, cashRevenue, qrRevenue, avg, orderCount: valid.length, dayRows, maxDay, topItems, staffRows };
 }
 
 function render(orders){
@@ -157,6 +169,15 @@ function render(orders){
     }).join("");
   }
 
+  const staffEl = document.getElementById("staffPanel");
+  const showStaff = stats.staffRows.some(r=>r.staffId);
+  staffEl.classList.toggle("hidden", !showStaff);
+  if(showStaff){
+    document.getElementById("staffRows").innerHTML = `<div class="order-table-wrap"><table><thead><tr><th>员工</th><th>订单</th><th>营业额</th><th>饮料杯</th></tr></thead><tbody>${
+      stats.staffRows.map(r=>`<tr><td>${escapeHtml(r.name)}</td><td>${r.orderCount}</td><td>${fmt(r.revenue)}</td><td>${r.cups}</td></tr>`).join("")
+    }</tbody></table></div>`;
+  }
+
   const orderTableEl = document.getElementById("orderTable");
   if(orders.length===0){
     orderTableEl.innerHTML = `<div class="empty-note">这段范围内没有订单</div>`;
@@ -168,13 +189,14 @@ function render(orders){
         <td>${o.paymentMethod==="cash"?"现金":"电子钱包"}</td>
         <td>${o.orderType==="takeaway" ? "外带 Take Away" : o.orderType==="dinein" ? "堂食 Dine In"+(o.table ? " 桌"+escapeHtml(o.table) : "") : ""}</td>
         <td>${fmt(o.total)}</td>
+        <td>${escapeHtml(o.staffName||"")}</td>
         <td>${o.voided?"已作废":""}</td>
       </tr>
     `).join("");
     orderTableEl.innerHTML = `
       <div class="order-table-wrap">
         <table>
-          <thead><tr><th>订单号</th><th>时间</th><th>付款</th><th>类型</th><th>总计</th><th></th></tr></thead>
+          <thead><tr><th>订单号</th><th>时间</th><th>付款</th><th>类型</th><th>总计</th><th>员工</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>

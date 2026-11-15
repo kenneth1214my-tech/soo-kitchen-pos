@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202611152000">
+<link rel="manifest" href="manifest.json?v=202611152100">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202611152000">
-<link rel="icon" href="icon-192.png?v=202611152000">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611152100">
+<link rel="icon" href="icon-192.png?v=202611152100">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202611152000">
+<link rel="stylesheet" href="style.css?v=202611152100">
 </head>
 <body>
 
@@ -34,6 +34,7 @@
     <span id="clock"></span>
   </div>
   <div class="topbar-actions">
+    <button class="icon-btn hidden" id="btnStaff" title="员工 / 打卡 / 切换员工">👤 员工</button>
     <button class="icon-btn hidden" id="btnCustomerOrders" title="顾客扫码点的单">📲 顾客点单 <span id="custCountBadge" class="count-badge hidden">0</span></button>
     <button class="icon-btn" id="btnHeldOrders" title="挂起的订单">🧷 挂单 <span id="heldCountBadge" class="count-badge hidden">0</span></button>
     <button class="icon-btn" id="btnHistory" title="今日订单">🧾 记录</button>
@@ -340,8 +341,44 @@
   <div class="modal-box wide">
     <div class="modal-header"><span>今日订单记录</span><button class="close-btn" data-close="historyModal">✕</button></div>
     <div id="historySummary" class="history-summary"></div>
+    <div id="historyStaff" class="history-staff hidden"></div>
     <button id="btnPrintSettlement" class="secondary-btn hidden" style="margin:0 18px 12px;width:calc(100% - 36px);">🖨 打印今日结算单</button>
     <div id="historyList" class="history-list"></div>
+  </div>
+</div>
+
+<!-- Staff: lock screen, menu, clock-in prompt -->
+<div id="staffLock" class="staff-lock hidden">
+  <div class="staff-lock-box">
+    <div class="staff-lock-icon">🔒</div>
+    <div class="staff-lock-shop" id="staffLockShop"></div>
+    <p>请输入你的员工 PIN</p>
+    <input type="password" inputmode="numeric" id="staffPinInput" maxlength="8" placeholder="PIN" autocomplete="off">
+    <button id="btnStaffPinSubmit" class="primary-btn">登入</button>
+    <p id="staffPinError" class="error hidden">PIN 不对</p>
+  </div>
+</div>
+
+<div id="staffMenuModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span>👤 <span id="staffMenuName"></span></span><button class="close-btn" data-close="staffMenuModal">✕</button></div>
+    <div style="padding:14px 18px;">
+      <p id="staffMenuShift" class="hint" style="margin:0 0 12px;text-align:left;"></p>
+      <button id="btnClockIn" class="primary-btn" style="width:100%;margin:0 0 8px;">🟢 打上班卡</button>
+      <button id="btnClockOut" class="primary-btn hidden" style="width:100%;margin:0 0 8px;">🔴 打下班卡</button>
+      <button id="btnSwitchStaff" class="secondary-btn" style="width:100%;">🔒 切换员工 / 锁定</button>
+    </div>
+  </div>
+</div>
+
+<div id="clockPromptModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header"><span>打上班卡</span><button class="close-btn" data-close="clockPromptModal">✕</button></div>
+    <div style="padding:14px 18px;">
+      <p id="clockPromptText" style="margin:0 0 12px;font-size:16px;"></p>
+      <button id="btnClockPromptYes" class="primary-btn" style="width:100%;margin:0 0 8px;">打上班卡</button>
+      <button id="btnClockPromptNo" class="secondary-btn" style="width:100%;">稍后</button>
+    </div>
   </div>
 </div>
 
@@ -367,6 +404,7 @@
         <button class="settings-tab" data-tab="menu">菜单管理</button>
         <button class="settings-tab" data-tab="combo">套餐管理</button>
         <button class="settings-tab" data-tab="promo">优惠管理</button>
+        <button class="settings-tab" data-tab="staff">员工管理</button>
         <button class="settings-tab" data-tab="cloud">云端同步</button>
       </div>
 
@@ -499,6 +537,32 @@
         <div id="promoEditorList"></div>
       </div>
 
+      <div id="tabStaff" class="settings-panel hidden">
+        <p class="hint" style="text-align:left;">给每位员工一个自己的 PIN。<b>收银员</b>只能点餐、结账、处理顾客点单;改菜单、折扣、作废/重开订单、看营业额、进设置都要<b>老板</b> PIN(设置里的管理密码,或设为「老板/经理」的员工)。每张订单会记下是谁收的,可以看每人业绩;员工还能打上下班卡,自动算工时。</p>
+        <label class="checkbox-row"><input type="checkbox" id="inputStaffLoginRequired"> 启用员工登入(开机和交班时输入 PIN)</label>
+        <p id="staffLoginHint" class="hint" style="text-align:left;"></p>
+        <div id="staffList"></div>
+        <h4 class="staff-h">＋ 新增员工</h4>
+        <div class="staff-add">
+          <input type="text" id="staffNewName" maxlength="20" placeholder="名字">
+          <select id="staffNewRole"><option value="cashier">收银员</option><option value="owner">老板/经理</option></select>
+          <input type="text" id="staffNewPin" inputmode="numeric" maxlength="8" placeholder="PIN (4-8位数字)">
+          <button id="btnAddStaff" class="secondary-btn">新增</button>
+        </div>
+        <p class="hint" style="text-align:left;">员工名单只存在这台设备上(PIN 不会同步到云端)。多台设备请各自设置。</p>
+        <hr>
+        <div class="staff-range"><span>统计范围:</span>
+          <button class="pc-chip" data-staff-range="today">今天</button>
+          <button class="pc-chip" data-staff-range="week">本周</button>
+          <button class="pc-chip" data-staff-range="month">本月</button>
+        </div>
+        <h4 class="staff-h">📊 员工业绩</h4>
+        <div id="staffSales"></div>
+        <h4 class="staff-h">⏱ 出勤与工时</h4>
+        <div id="staffAttendance"></div>
+        <button id="btnExportAttendance" class="secondary-btn" style="margin-top:10px;">导出出勤记录 (CSV)</button>
+      </div>
+
       <div id="tabCloud" class="settings-panel hidden">
         <p class="hint" style="text-align:left;">同步菜单、套餐、优惠、店铺设置到其他设备(不同步销售记录/挂单/管理密码)。需要先在 Firebase 官网建一个免费项目,把项目配置贴在下面——两台设备都要贴同一份配置、填同一个店铺代号。</p>
         <p class="hint" style="text-align:left;color:var(--danger);">⚠️ 请避免两台设备同时改动菜单/优惠 — 几乎同时改动时,较晚送达云端的一方会整个盖掉较早的一方,不会自动合并,也不会警告。建议同一时间只由一台设备编辑菜单。</p>
@@ -534,6 +598,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202611152000" defer></script>
+<script src="app.js?v=202611152100" defer></script>
 </body>
 </html>

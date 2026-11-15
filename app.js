@@ -792,7 +792,7 @@ function openDiscountModal(){
   buildDiscountQuick();
   buildPromoPresets();
   updateDiscountPreview();
-  if(state.settings.discountPinRequired){
+  if(state.settings.discountPinRequired || discountNeedsOwner()){
     document.getElementById("discountPinGate").classList.remove("hidden");
     document.getElementById("discountBody").classList.add("hidden");
   }else{
@@ -1052,6 +1052,7 @@ function finalizeOrderInner(paymentMethod, extra){
     table: orderType==="dinein" ? (orderTable || null) : null,
     voided: false
   };
+  Object.assign(order, orderStaffFields());
   history.unshift(order);
   saveHistory();
   pushOrderToCloud(order);
@@ -1257,6 +1258,378 @@ function showReceipt(order, returnToSplitList){
   showModal("receiptModal");
 }
 
+// ---------- Staff management (员工管理) ----------
+// Staff are kept on THIS device only (like the manager PIN): their PINs must never ride along in the
+// cloud-synced menu/settings snapshot. What does travel with every order is the staff NAME (and id)
+// that rang it up, so the dashboard can show sales per person.
+//   - 老板 owner: the manager PIN from 设置 (shown as the virtual staff "老板") plus any staff set to owner.
+//     Owner PINs unlock everything that asks for a PIN (settings, discounts, void/reopen, revenue).
+//   - 收银员 cashier: can take orders and check out; a cashier's PIN is NOT accepted for those prompts.
+const STAFF_KEY = "sk_pos_staff_v1";
+const ATTEND_KEY = "sk_pos_attendance_v1";
+const STAFF_SESSION_KEY = "sk_pos_staff_session_v1";
+const MASTER_STAFF = { id:"owner", name:"老板", role:"owner", virtual:true };
+const STALE_SHIFT_MIN = 16 * 60;           // an open shift older than this is treated as a forgotten clock-out
+
+function loadStaffData(){
+  try{
+    const d = JSON.parse(localStorage.getItem(STAFF_KEY));
+    return { loginRequired: !!(d && d.loginRequired), staff: (d && Array.isArray(d.staff)) ? d.staff : [] };
+  }catch(e){ return { loginRequired:false, staff:[] }; }
+}
+function saveStaffData(){ localStorage.setItem(STAFF_KEY, JSON.stringify(staffData)); }
+function loadAttendance(){
+  try{ const a = JSON.parse(localStorage.getItem(ATTEND_KEY)); return Array.isArray(a) ? a : []; }
+  catch(e){ return []; }
+}
+function saveAttendance(){ localStorage.setItem(ATTEND_KEY, JSON.stringify(attendance)); }
+let staffData = loadStaffData();
+let attendance = loadAttendance();
+let currentStaffId = null;
+let lastPinHolder = null;                  // who just proved an owner PIN (for the void audit trail)
+
+function activeStaff(){ return staffData.staff.filter(s=>s.active!==false); }
+function staffById(id){
+  if(id === MASTER_STAFF.id) return MASTER_STAFF;
+  return staffData.staff.find(s=>s.id===id) || null;
+}
+function staffLoginOn(){ return !!staffData.loginRequired && activeStaff().length>0; }
+function currentStaff(){
+  if(!staffLoginOn() || !currentStaffId) return null;
+  const s = staffById(currentStaffId);
+  return (s && s.active!==false) ? s : null;
+}
+function staffRoleLabel(role){ return role==="owner" ? "老板/经理" : "收银员"; }
+function findStaffByPin(pin){
+  if(!pin) return null;
+  if(pin === state.settings.pin) return MASTER_STAFF;
+  return activeStaff().find(s=>s.pin===pin) || null;
+}
+// True for the manager PIN or any active owner-role staff PIN. Every PIN prompt in the app goes
+// through this, so a cashier's own PIN can never open settings, discounts, void/reopen or revenue.
+function isOwnerPin(pin){
+  const s = findStaffByPin(pin);
+  if(s && s.role==="owner"){ lastPinHolder = s; return true; }
+  return false;
+}
+// Returns "" when OK, otherwise the problem. exceptId lets a staff member keep their own PIN.
+function staffPinProblem(pin, exceptId){
+  if(!/^\d{4,8}$/.test(pin||"")) return "PIN 要是 4 到 8 位数字";
+  if(pin === state.settings.pin) return "这个 PIN 和老板管理密码一样,请换一个";
+  if(staffData.staff.some(s=>s.id!==exceptId && s.pin===pin)) return "这个 PIN 已经有人用了,请换一个";
+  return "";
+}
+function setCurrentStaff(s){
+  currentStaffId = s ? s.id : null;
+  try{ if(s) sessionStorage.setItem(STAFF_SESSION_KEY, s.id); else sessionStorage.removeItem(STAFF_SESSION_KEY); }catch(e){}
+  renderStaffChip();
+}
+function restoreStaffSession(){
+  let id = null; try{ id = sessionStorage.getItem(STAFF_SESSION_KEY); }catch(e){}
+  const s = id ? staffById(id) : null;
+  currentStaffId = (s && s.active!==false) ? s.id : null;
+}
+// What gets stamped on an order: who rang it up. Nothing when staff login is off (as before).
+function orderStaffFields(){
+  const s = currentStaff();
+  return s ? { staffId: s.id, staffName: s.name } : {};
+}
+
+// ---- attendance ----
+function openShiftOf(staffId){ return attendance.find(a=>a.staffId===staffId && !a.outAt) || null; }
+function shiftMinutes(a, now){
+  const end = a.outAt ? new Date(a.outAt) : (now || new Date());
+  return Math.max(0, Math.round((end - new Date(a.inAt)) / 60000));
+}
+function isStaleShift(a, now){ return !a.outAt && shiftMinutes(a, now) > STALE_SHIFT_MIN; }
+function fmtDuration(min){ return Math.floor(min/60) + "小时" + String(min%60).padStart(2,"0") + "分"; }
+function fmtClock(iso){ const d = new Date(iso); return d.toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"}); }
+function localDateStr(iso){ return dateInputStr(new Date(iso)); }
+function clockIn(staff){
+  if(!staff || openShiftOf(staff.id)) return false;
+  attendance.push({ id: uid(), staffId: staff.id, name: staff.name, inAt: new Date().toISOString(), outAt: null });
+  saveAttendance();
+  return true;
+}
+function clockOut(staff){
+  const a = staff && openShiftOf(staff.id);
+  if(!a) return false;
+  a.outAt = new Date().toISOString();
+  saveAttendance();
+  return true;
+}
+// Closed shifts plus any still-running shift that isn't a forgotten clock-out.
+function countableMinutes(list, now){
+  return list.reduce((sum,a)=> isStaleShift(a, now) ? sum : sum + shiftMinutes(a, now), 0);
+}
+
+// ---- sales per staff ----
+// Orders rung up before staff login existed (or with it off) are grouped as 未登记.
+function computeStaffSummary(orders){
+  const valid = orders.filter(o=>!o.voided);
+  const by = new Map();
+  const slot = o=>{
+    const key = o.staffId || "";
+    if(!by.has(key)) by.set(key, { staffId:key, name: o.staffName || "未登记", orderCount:0, totalSales:0, orders:[] });
+    return by.get(key);
+  };
+  valid.forEach(o=>{ const r = slot(o); r.orderCount++; r.totalSales += o.total||0; r.orders.push(o); });
+  return [...by.values()].map(r=>({
+    staffId: r.staffId, name: r.name, orderCount: r.orderCount,
+    totalSales: round2(r.totalSales),
+    beverageCups: beverageTotals(ordersForItemStats(r.orders)).cups
+  })).sort((a,b)=>b.totalSales-a.totalSales);
+}
+
+// ---- lock screen / login ----
+let staffPinFails = 0, staffLockedUntil = 0;
+function showStaffLock(){
+  const el = document.getElementById("staffLock");
+  document.body.appendChild(el);
+  el.classList.remove("hidden");
+  document.getElementById("staffLockShop").textContent = state.settings.shopName || "";
+  document.getElementById("staffPinInput").value = "";
+  document.getElementById("staffPinError").classList.add("hidden");
+  setTimeout(()=>{ try{ document.getElementById("staffPinInput").focus(); }catch(e){} }, 50);
+}
+function hideStaffLock(){ document.getElementById("staffLock").classList.add("hidden"); }
+function trySubmitStaffPin(){
+  const err = document.getElementById("staffPinError");
+  const input = document.getElementById("staffPinInput");
+  if(Date.now() < staffLockedUntil){
+    err.textContent = "输错太多次,请 " + Math.ceil((staffLockedUntil-Date.now())/1000) + " 秒后再试";
+    err.classList.remove("hidden"); return;
+  }
+  const s = findStaffByPin(input.value.trim());
+  if(!s){
+    staffPinFails++;
+    input.value = "";
+    if(staffPinFails >= 5){ staffPinFails = 0; staffLockedUntil = Date.now() + 30000; err.textContent = "输错 5 次,请等 30 秒再试"; }
+    else err.textContent = "PIN 不对";
+    err.classList.remove("hidden");
+    return;
+  }
+  staffPinFails = 0;
+  setCurrentStaff(s);
+  hideStaffLock();
+  alertToast("欢迎, " + s.name);
+  if(!s.virtual && !openShiftOf(s.id)) promptClockIn(s);
+}
+function promptClockIn(s){
+  document.getElementById("clockPromptText").textContent = s.name + ",现在 " + fmtClock(new Date().toISOString()) + " — 要打上班卡吗?";
+  showModal("clockPromptModal");
+}
+function lockTill(){
+  setCurrentStaff(null);
+  showStaffLock();
+}
+
+// ---- header chip + staff menu ----
+function renderStaffChip(){
+  const btn = document.getElementById("btnStaff");
+  if(!btn) return;
+  const s = currentStaff();
+  btn.classList.toggle("hidden", !staffLoginOn());
+  btn.textContent = "👤 " + (s ? s.name : "员工");
+}
+function openStaffMenu(){
+  const s = currentStaff();
+  if(!s){ showStaffLock(); return; }
+  const shift = openShiftOf(s.id);
+  document.getElementById("staffMenuName").textContent = s.name + " · " + (s.virtual ? "老板(管理密码)" : staffRoleLabel(s.role));
+  const st = document.getElementById("staffMenuShift");
+  if(shift){
+    st.textContent = isStaleShift(shift) ? "⚠️ 上班中,但上次上班是 " + new Date(shift.inAt).toLocaleString("en-MY") + " — 好像忘了打下班卡"
+      : "🟢 上班中 · " + fmtClock(shift.inAt) + " 开始 · 已 " + fmtDuration(shiftMinutes(shift));
+  }else st.textContent = "⚪ 还没打上班卡";
+  document.getElementById("btnClockIn").classList.toggle("hidden", !!shift);
+  document.getElementById("btnClockOut").classList.toggle("hidden", !shift);
+  showModal("staffMenuModal");
+}
+function doClockIn(){
+  const s = currentStaff(); if(!s) return;
+  if(clockIn(s)){ alertToast("已打上班卡 " + fmtClock(new Date().toISOString())); }
+  hideModal("staffMenuModal"); hideModal("clockPromptModal");
+  renderStaffAdmin();
+}
+function doClockOut(){
+  const s = currentStaff(); if(!s) return;
+  const shift = openShiftOf(s.id);
+  if(clockOut(s)) alertToast("已打下班卡 · 今天上了 " + fmtDuration(shiftMinutes(Object.assign({}, shift, { outAt: new Date().toISOString() }))));
+  hideModal("staffMenuModal");
+  renderStaffAdmin();
+}
+function switchStaff(){
+  const s = currentStaff();
+  const shift = s && openShiftOf(s.id);
+  hideModal("staffMenuModal");
+  if(shift && !confirm("你还在上班中。\n\n按「确定」:打下班卡,然后切换员工\n按「取消」:不打卡,只切换员工(继续算上班)")) { lockTill(); return; }
+  if(shift) clockOut(s);
+  lockTill();
+}
+
+// ---- 设置 → 员工管理 ----
+let staffRange = "today";
+function staffRangeDates(){
+  const today = todayStr();
+  if(staffRange==="week") return { start: startOfWeekStr(), end: today };
+  if(staffRange==="month") return { start: startOfMonthStr(), end: today };
+  return { start: today, end: today };
+}
+function renderStaffAdmin(){
+  const list = document.getElementById("staffList");
+  if(!list) return;
+  document.getElementById("inputStaffLoginRequired").checked = !!staffData.loginRequired;
+  document.getElementById("staffLoginHint").textContent = staffData.loginRequired
+    ? (activeStaff().length ? "已启用:开机和交班时要输入 PIN。老板的管理密码也能登入(显示为「老板」)。" : "已勾选,但还没有在职员工 — 先新增至少一位员工才会生效。")
+    : "未启用:收银时不用登入,订单不记录是谁收的(和以前一样)。";
+  list.innerHTML = "";
+  if(!staffData.staff.length) list.innerHTML = `<div class="cart-empty">还没有员工,在下面新增第一位</div>`;
+  staffData.staff.forEach(s=>{
+    const row = document.createElement("div");
+    row.className = "staff-row" + (s.active===false ? " off" : "");
+    const shift = openShiftOf(s.id);
+    row.innerHTML = `
+      <div class="sr-line1">
+        <input type="text" class="sr-name" maxlength="20" value="${escapeHtml(s.name)}" placeholder="名字">
+        <select class="sr-role"><option value="cashier"${s.role!=="owner"?" selected":""}>收银员</option><option value="owner"${s.role==="owner"?" selected":""}>老板/经理</option></select>
+      </div>
+      <div class="sr-line2">
+        <input type="text" class="sr-pin" inputmode="numeric" maxlength="8" value="${escapeHtml(s.pin)}" placeholder="PIN" title="4-8 位数字,员工登入用">
+        <label class="sr-active"><input type="checkbox" ${s.active!==false?"checked":""}> 在职</label>
+        <span class="sr-shift">${shift ? (isStaleShift(shift) ? "⚠️ 未下班?" : "🟢 上班中") : ""}</span>
+        <button class="sr-del" title="删除">🗑</button>
+      </div>`;
+    const nameIn = row.querySelector(".sr-name"), roleSel = row.querySelector(".sr-role"), pinIn = row.querySelector(".sr-pin");
+    nameIn.onchange = ()=>{
+      const v = nameIn.value.trim();
+      if(!v){ nameIn.value = s.name; return; }
+      s.name = v; saveStaffData(); renderStaffChip();
+    };
+    roleSel.onchange = ()=>{
+      s.role = roleSel.value; saveStaffData(); renderStaffAdmin();
+    };
+    pinIn.onchange = ()=>{
+      const v = pinIn.value.trim();
+      const p = staffPinProblem(v, s.id);
+      if(p){ alertToast(p); pinIn.value = s.pin; return; }
+      s.pin = v; saveStaffData(); alertToast("PIN 已更新");
+    };
+    row.querySelector(".sr-active input").onchange = (e)=>{
+      s.active = e.target.checked;
+      saveStaffData();
+      if(!s.active && currentStaffId===s.id) lockTill();
+      renderStaffAdmin(); renderStaffChip();
+    };
+    row.querySelector(".sr-del").onclick = ()=>{
+      if(!confirm(`确定删除员工「${s.name}」?\n以前的订单和出勤记录会保留他的名字。`)) return;
+      const wasMe = currentStaffId===s.id;
+      staffData.staff = staffData.staff.filter(x=>x.id!==s.id);
+      saveStaffData();
+      if(wasMe) lockTill();
+      renderStaffAdmin(); renderStaffChip();
+    };
+    list.appendChild(row);
+  });
+  renderStaffReports();
+}
+function addStaffFromForm(){
+  const name = document.getElementById("staffNewName").value.trim();
+  const role = document.getElementById("staffNewRole").value === "owner" ? "owner" : "cashier";
+  const pin = document.getElementById("staffNewPin").value.trim();
+  if(!name){ alertToast("请填写名字"); return; }
+  if(staffData.staff.some(s=>s.name.toLowerCase()===name.toLowerCase())){ alertToast("已经有同名的员工了,请加个区别"); return; }
+  const p = staffPinProblem(pin, null);
+  if(p){ alertToast(p); return; }
+  staffData.staff.push({ id: uid(), name, role, pin, active:true, createdAt: new Date().toISOString() });
+  saveStaffData();
+  document.getElementById("staffNewName").value = ""; document.getElementById("staffNewPin").value = "";
+  alertToast("已新增员工「" + name + "」");
+  renderStaffAdmin();
+}
+function toggleStaffLoginRequired(on){
+  if(on && !activeStaff().length){
+    document.getElementById("inputStaffLoginRequired").checked = false;
+    alertToast("请先新增至少一位员工,再启用登入");
+    return;
+  }
+  staffData.loginRequired = !!on;
+  saveStaffData();
+  // The person turning this on has just proved the manager PIN, so they stay signed in as 老板 instead of being locked out of their own till.
+  if(on && !currentStaff()) setCurrentStaff(MASTER_STAFF); else renderStaffChip();
+  renderStaffAdmin();
+}
+
+function renderStaffReports(){
+  const { start, end } = staffRangeDates();
+  document.querySelectorAll("[data-staff-range]").forEach(b=>b.classList.toggle("active", b.dataset.staffRange===staffRange));
+  // sales
+  const orders = history.filter(o=>o.date>=start && o.date<=end);
+  const rows = computeStaffSummary(orders);
+  const box = document.getElementById("staffSales");
+  box.innerHTML = rows.length ? `<table class="staff-table"><thead><tr><th>员工</th><th>订单</th><th>销售额</th><th>饮料杯</th></tr></thead><tbody>${
+    rows.map(r=>`<tr><td>${escapeHtml(r.name)}</td><td>${r.orderCount}</td><td>${fmt(r.totalSales)}</td><td>${r.beverageCups}</td></tr>`).join("")
+  }</tbody></table>` : `<div class="cart-empty">这段时间没有订单</div>`;
+  // attendance
+  const now = new Date();
+  const shifts = attendance.filter(a=>{ const d = localDateStr(a.inAt); return d>=start && d<=end; })
+    .sort((a,b)=>b.inAt.localeCompare(a.inAt));
+  const totals = new Map();
+  shifts.forEach(a=>{ if(!isStaleShift(a, now)) totals.set(a.name, (totals.get(a.name)||0) + shiftMinutes(a, now)); });
+  const ab = document.getElementById("staffAttendance");
+  if(!shifts.length){ ab.innerHTML = `<div class="cart-empty">这段时间没有出勤记录</div>`; return; }
+  const toLocalInput = iso => { const d = new Date(iso); const p = n=>String(n).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"T"+p(d.getHours())+":"+p(d.getMinutes()); };
+  ab.innerHTML = `
+    <div class="att-totals">${[...totals.entries()].map(([n,m])=>`<span class="att-total">${escapeHtml(n)} ${fmtDuration(m)}</span>`).join("")}</div>
+    <div class="att-list"></div>`;
+  const listEl = ab.querySelector(".att-list");
+  shifts.forEach(a=>{
+    const stale = isStaleShift(a, now);
+    const row = document.createElement("div");
+    row.className = "att-row" + (stale ? " stale" : "");
+    row.innerHTML = `
+      <div class="att-name">${escapeHtml(a.name)}</div>
+      <input type="datetime-local" class="att-in" value="${toLocalInput(a.inAt)}">
+      <span>→</span>
+      ${a.outAt ? `<input type="datetime-local" class="att-out" value="${toLocalInput(a.outAt)}">` : `<span class="att-open">${stale ? "⚠️ 忘了下班?" : "上班中"}</span>${stale ? `<button class="att-fix" title="设成现在下班">下班</button>` : ""}`}
+      <span class="att-dur">${stale ? "" : fmtDuration(shiftMinutes(a, now))}</span>
+      <button class="att-del" title="删除这条">🗑</button>`;
+    const inEl = row.querySelector(".att-in"), outEl = row.querySelector(".att-out");
+    const commit = ()=>{
+      const i = new Date(inEl.value), o = outEl ? new Date(outEl.value) : null;
+      if(isNaN(i) || (o && (isNaN(o) || o < i))){ alertToast("时间不对:下班要晚于上班"); renderStaffReports(); return; }
+      a.inAt = i.toISOString(); if(o) a.outAt = o.toISOString();
+      saveAttendance(); renderStaffReports();
+    };
+    inEl.onchange = commit; if(outEl) outEl.onchange = commit;
+    const fix = row.querySelector(".att-fix");
+    if(fix) fix.onclick = ()=>{ a.outAt = new Date().toISOString(); saveAttendance(); renderStaffReports(); renderStaffAdmin(); };
+    row.querySelector(".att-del").onclick = ()=>{
+      if(!confirm("确定删除这条出勤记录?")) return;
+      attendance = attendance.filter(x=>x.id!==a.id); saveAttendance(); renderStaffReports(); renderStaffAdmin();
+    };
+    listEl.appendChild(row);
+  });
+}
+function exportAttendanceCsv(){
+  const { start, end } = staffRangeDates();
+  const shifts = attendance.filter(a=>{ const d = localDateStr(a.inAt); return d>=start && d<=end; })
+    .sort((a,b)=>a.inAt.localeCompare(b.inAt));
+  if(!shifts.length){ alertToast("这段时间没有出勤记录"); return; }
+  const now = new Date();
+  const rows = [["员工","日期","上班","下班","工时(小时)","备注"]];
+  shifts.forEach(a=>{
+    const stale = isStaleShift(a, now);
+    rows.push([a.name, localDateStr(a.inAt), fmtClock(a.inAt), a.outAt ? fmtClock(a.outAt) : "", (a.outAt || !stale) ? (shiftMinutes(a, now)/60).toFixed(2) : "", a.outAt ? "" : (stale ? "没打下班卡" : "上班中")]);
+  });
+  const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n");
+  downloadBlob("﻿"+csv, `attendance-${start}_to_${end}.csv`, "text/csv;charset=utf-8");
+  alertToast("出勤记录已导出");
+}
+
+// Cashiers need the manager (or an owner-role staff PIN) for discounts; owners follow the shop setting.
+function discountNeedsOwner(){ const s = currentStaff(); return !!s && s.role==="cashier"; }
+
 // ---------- Generic PIN confirm ----------
 let pinConfirmCallback = null;
 function requestPinConfirm(title, callback){
@@ -1294,7 +1667,8 @@ function computeDailySummary(todays){
     takeawaySales: round2(valid.filter(o=>o.orderType==="takeaway").reduce((s,o)=>s+o.total,0)),
     // Beverage cups/sales come from item lines (before discount/tax), counted once per real order.
     beverageCups: beverageTotals(ordersForItemStats(valid)).cups,
-    beverageSales: beverageTotals(ordersForItemStats(valid)).sales
+    beverageSales: beverageTotals(ordersForItemStats(valid)).sales,
+    byStaff: computeStaffSummary(todays)
   };
 }
 function beverageTotals(orders){
@@ -1317,9 +1691,16 @@ function renderHistoryStats(todays){
       });
     };
     settlementBtn.classList.add("hidden");
+    document.getElementById("historyStaff").classList.add("hidden");
     return;
   }
   const s = computeDailySummary(todays);
+  const staffBox = document.getElementById("historyStaff");
+  const staffRows = (s.byStaff||[]).filter(r=>r.staffId);
+  if(staffRows.length){
+    staffBox.innerHTML = `<b>员工业绩</b>` + (s.byStaff||[]).map(r=>`<span class="hs-chip">${escapeHtml(r.name)} · ${r.orderCount}单 · ${fmt(r.totalSales)}</span>`).join("");
+    staffBox.classList.remove("hidden");
+  }else staffBox.classList.add("hidden");
   box.innerHTML = `
     <div class="stat">订单数<b>${s.orderCount}</b></div>
     <div class="stat">总营业额<b>${fmt(s.totalSales)}</b></div>
@@ -1371,11 +1752,12 @@ function openHistory(){
 }
 
 function voidOrder(orderNo){
-  requestPinConfirm(`作废订单 ${orderNo}`, ()=>{
+  requestPinConfirm(`作废订单 ${orderNo}`, (who)=>{
     const ord = history.find(o=>o.orderNo===orderNo);
     if(!ord) return;
     if(!confirm(`确定作废订单 ${orderNo} (${fmt(ord.total)})？此操作会保留记录但不计入今日营业额。`)) return;
     ord.voided = true;
+    if(who) ord.voidedBy = who.name;
     saveHistory();
     pushOrderToCloud(ord);
     openHistory();
@@ -1716,7 +2098,7 @@ function openSettings(){
 
 function trySubmitPin(){
   const val = document.getElementById("pinInput").value;
-  if(val === state.settings.pin){
+  if(isOwnerPin(val)){
     unlockedSettings = true;
     document.getElementById("pinGate").classList.add("hidden");
     document.getElementById("settingsBody").classList.remove("hidden");
@@ -1746,6 +2128,7 @@ function populateSettingsForm(){
   document.getElementById("inputDrinkOptions").value = state.settings.drinkOptions || "";
   document.getElementById("inputDefaultOrderType").value = state.settings.defaultOrderType==="takeaway" ? "takeaway" : "dinein";
   document.getElementById("inputNewPin").value = "";
+  renderStaffAdmin();
   document.getElementById("defaultPinWarning").classList.toggle("hidden", state.settings.pin!=="0000");
   updatePrinterStatus();
   if(!navigator.bluetooth){
@@ -1930,7 +2313,10 @@ function saveGeneralSettings(){
   state.settings.drinkOptions = document.getElementById("inputDrinkOptions").value.trim();
   state.settings.defaultOrderType = document.getElementById("inputDefaultOrderType").value;
   const newPin = document.getElementById("inputNewPin").value.trim();
-  if(newPin.length>=4){ state.settings.pin = newPin; }
+  if(newPin.length>=4){
+    if(staffData.staff.some(s=>s.pin===newPin)) alertToast("管理密码没改:这个 PIN 已经有员工在用了,请换一个");
+    else state.settings.pin = newPin;
+  }
   saveState();
   document.getElementById("shopName").textContent = state.settings.shopName;
   renderCart();
@@ -2822,7 +3208,7 @@ function initCloudSyncOnLoad(){
 }
 
 function exportBackup(){
-  const payload = { exportedAt: new Date().toISOString(), state, history, heldOrders };
+  const payload = { exportedAt: new Date().toISOString(), state, history, heldOrders, staffData, attendance };
   downloadBlob(JSON.stringify(payload, null, 2), `soos-kitchen-pos-backup-${todayStr()}.json`, "application/json");
   markBackedUp();
   alertToast("备份已导出");
@@ -2832,7 +3218,7 @@ function exportBackup(){
 // kiosk/lockdown browsers where file downloads may also be restricted. Uses select() rather than
 // the Clipboard API since that can be blocked too; the operator selects-all and copies manually.
 function exportBackupAsText(){
-  const payload = { exportedAt: new Date().toISOString(), state, history, heldOrders };
+  const payload = { exportedAt: new Date().toISOString(), state, history, heldOrders, staffData, attendance };
   const area = document.getElementById("importPasteArea");
   area.value = JSON.stringify(payload);
   area.focus();
@@ -2875,16 +3261,16 @@ function exportHistoryCsv(){
   const end = document.getElementById("csvEndDate").value || todayStr();
   const filtered = history.filter(o=> o.date>=start && o.date<=end);
   if(filtered.length===0){ alertToast("这段范围内没有订单记录"); return; }
-  const rows = [["订单号","日期","时间","付款方式","小计","折扣","服务税","四舍五入","总计","是否分单","是否作废","类型","桌号"]];
+  const rows = [["订单号","日期","时间","付款方式","小计","折扣","服务税","四舍五入","总计","是否分单","是否作废","类型","桌号","员工"]];
   filtered.forEach(o=> rows.push([
     o.orderNo, o.date, o.time, o.paymentMethod==="cash"?"现金":"电子钱包",
     o.subtotal, o.discount||0, o.tax||0, o.roundingAdj||0, o.total,
     o.isSplit?"是":"否", o.voided?"是":"否",
-    o.orderType==="dinein" ? "堂食 Dine In" : o.orderType==="takeaway" ? "外带 Take Away" : "", o.table || ""
+    o.orderType==="dinein" ? "堂食 Dine In" : o.orderType==="takeaway" ? "外带 Take Away" : "", o.table || "", o.staffName || ""
   ]));
   const validRows = filtered.filter(o=>!o.voided);
   rows.push([]);
-  rows.push(["合计 (不含已作废)","","","", "", "", "", "", validRows.reduce((s,o)=>s+o.total,0).toFixed(2), "", "", "", ""]);
+  rows.push(["合计 (不含已作废)","","","", "", "", "", "", validRows.reduce((s,o)=>s+o.total,0).toFixed(2), "", "", "", "", ""]);
   const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n");
   downloadBlob("﻿"+csv, `sales-${start}_to_${end}.csv`, "text/csv;charset=utf-8");
   alertToast("销售记录已导出");
@@ -2908,6 +3294,13 @@ function applyBackupJson(jsonText){
   });
   history = Array.isArray(payload.history) ? payload.history : [];
   heldOrders = Array.isArray(payload.heldOrders) ? payload.heldOrders : [];
+  if(payload.staffData){
+    staffData = { loginRequired: !!payload.staffData.loginRequired, staff: Array.isArray(payload.staffData.staff) ? payload.staffData.staff : [] };
+    attendance = Array.isArray(payload.attendance) ? payload.attendance : [];
+    saveStaffData(); saveAttendance();
+    restoreStaffSession(); renderStaffChip();
+    if(staffLoginOn() && !currentStaff()) showStaffLock();
+  }
   migrateColdSurcharge();
   saveState(); saveHistory(); saveHeldOrders();
   activeCategory = state.menu[0] ? state.menu[0].id : null;
@@ -3366,6 +3759,7 @@ function showSettlement(){
     <div class="r-line"><span>堂食 Dine In (${s.dineInCount}单)</span><span>${fmt(s.dineInSales)}</span></div>
     <div class="r-line"><span>外带 Take Away (${s.takeawayCount}单)</span><span>${fmt(s.takeawaySales)}</span></div>` : ""}
     ${s.beverageCups>0 ? `<hr><div class="r-line"><span>饮料 (${s.beverageCups}杯)</span><span>${fmt(s.beverageSales)}</span></div>` : ""}
+    ${(s.byStaff||[]).some(r=>r.staffId) ? `<hr>` + s.byStaff.map(r=>`<div class="r-line"><span>${escapeHtml(r.name)} (${r.orderCount}单)</span><span>${fmt(r.totalSales)}</span></div>`).join("") : ""}
     <hr>
     <div class="r-line"><span>应有现金 (抽屉清点用)</span><span>${fmt(s.cashSales)}</span></div>
     <div class="r-meta" style="margin-top:10px;">打印时间: ${new Date().toLocaleString("en-MY")}</div>
@@ -3394,6 +3788,11 @@ function settlementToPrintBlocks(s, dateStr){
   if(s.beverageCups>0){
     blocks.push({ text: "--------------------------------", spacingAfter:4 });
     blocks.push({ text: `饮料 (${s.beverageCups}杯)  ${fmt(s.beverageSales)}`, align:"right", spacingAfter:6 });
+  }
+  if((s.byStaff||[]).some(r=>r.staffId)){
+    blocks.push({ text: "--------------------------------", spacingAfter:4 });
+    s.byStaff.forEach(r=> blocks.push({ text: `${r.name} (${r.orderCount}单)  ${fmt(r.totalSales)}`, align:"right" }));
+    blocks.push({ text: "", spacingAfter:4 });
   }
   blocks.push({ text: "--------------------------------", spacingAfter:4 });
   blocks.push({ text: `应有现金 (抽屉清点用)  ${fmt(s.cashSales)}`, align:"right", spacingAfter:6 });
@@ -4369,6 +4768,9 @@ function init(){
   renderCart();
   renderHeldBadge();
   renderTrashBadge();
+  restoreStaffSession();
+  renderStaffChip();
+  if(staffLoginOn() && !currentStaff()) showStaffLock();
   maybeShowBackupReminder();
   tickClock();
   setInterval(tickClock, 15000);
@@ -4404,13 +4806,29 @@ function init(){
 
   document.getElementById("btnSaveNote").onclick = saveItemNote;
 
+  // Staff
+  document.getElementById("btnStaff").onclick = openStaffMenu;
+  document.getElementById("btnStaffPinSubmit").onclick = trySubmitStaffPin;
+  document.getElementById("staffPinInput").addEventListener("keydown", e=>{ if(e.key==="Enter") trySubmitStaffPin(); });
+  document.getElementById("btnClockIn").onclick = doClockIn;
+  document.getElementById("btnClockOut").onclick = doClockOut;
+  document.getElementById("btnSwitchStaff").onclick = switchStaff;
+  document.getElementById("btnClockPromptYes").onclick = doClockIn;
+  document.getElementById("btnClockPromptNo").onclick = ()=> hideModal("clockPromptModal");
+  document.getElementById("inputStaffLoginRequired").onchange = (e)=> toggleStaffLoginRequired(e.target.checked);
+  document.getElementById("btnAddStaff").onclick = addStaffFromForm;
+  document.getElementById("btnExportAttendance").onclick = exportAttendanceCsv;
+  document.querySelectorAll("[data-staff-range]").forEach(b=>{
+    b.onclick = ()=>{ staffRange = b.dataset.staffRange; renderStaffReports(); };
+  });
+
   document.getElementById("btnPinConfirmSubmit").onclick = ()=>{
     const val = document.getElementById("pinConfirmInput").value;
-    if(val === state.settings.pin){
+    if(isOwnerPin(val)){
       hideModal("pinConfirmModal");
       const cb = pinConfirmCallback;
       pinConfirmCallback = null;
-      if(cb) cb();
+      if(cb) cb(lastPinHolder);
     }else{
       document.getElementById("pinConfirmError").classList.remove("hidden");
     }
@@ -4493,6 +4911,8 @@ function init(){
       document.getElementById("tabCombo").classList.toggle("hidden", tab.dataset.tab!=="combo");
       document.getElementById("tabPromo").classList.toggle("hidden", tab.dataset.tab!=="promo");
       document.getElementById("tabCloud").classList.toggle("hidden", tab.dataset.tab!=="cloud");
+      document.getElementById("tabStaff").classList.toggle("hidden", tab.dataset.tab!=="staff");
+      if(tab.dataset.tab==="staff") renderStaffAdmin();
     };
   });
   document.getElementById("btnSaveGeneral").onclick = saveGeneralSettings;
@@ -4569,7 +4989,7 @@ function init(){
   document.getElementById("btnApplyDiscount").onclick = applyDiscount;
   document.getElementById("btnDiscountPinSubmit").onclick = ()=>{
     const val = document.getElementById("discountPinInput").value;
-    if(val === state.settings.pin){
+    if(isOwnerPin(val)){
       document.getElementById("discountPinGate").classList.add("hidden");
       document.getElementById("discountBody").classList.remove("hidden");
     }else{
