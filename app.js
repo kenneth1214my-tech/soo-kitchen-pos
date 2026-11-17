@@ -223,6 +223,13 @@ function payableFor(total, method){
   return roundToUnit(total, u);
 }
 function roundingLabel(){ return roundingUnit()===5 ? "5分" : "10分"; }
+// Payment methods: "cash", "qr" (DuitNow / e-wallet) and "card" (NFC tap / card, taken in a separate
+// tap-to-pay app, then confirmed here). style: "html" / "print" = the receipt wording, default = short.
+function payMethodLabel(m, style){
+  if(m==="cash") return "现金";
+  if(m==="card") return style==="html" ? "刷卡 / Tap" : style==="print" ? "刷卡/Tap" : "刷卡/Tap";
+  return style==="html" ? "DuitNow / 电子钱包" : style==="print" ? "DuitNow/电子钱包" : "电子钱包";
+}
 function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 
 function ensureOrderSeq(){
@@ -932,9 +939,12 @@ function openCheckout(ctx){
   checkoutCtx = ctx || buildFullCartCtx();
   checkoutCtx.cashDue = payableFor(checkoutCtx.total, "cash");
   checkoutCtx.qrDue = payableFor(checkoutCtx.total, "qr");
+  checkoutCtx.cardDue = payableFor(checkoutCtx.total, "card");
   document.getElementById("dueAmount").textContent = fmt(checkoutCtx.cashDue);
   document.getElementById("dueAmountQr").textContent = fmt(checkoutCtx.qrDue);
-  [["cashRoundingNote", checkoutCtx.cashDue], ["qrRoundingNote", checkoutCtx.qrDue]].forEach(([id, due])=>{
+  document.getElementById("dueAmountCard").textContent = fmt(checkoutCtx.cardDue);
+  document.getElementById("cardRef").value = "";
+  [["cashRoundingNote", checkoutCtx.cashDue], ["qrRoundingNote", checkoutCtx.qrDue], ["cardRoundingNote", checkoutCtx.cardDue]].forEach(([id, due])=>{
     const note = document.getElementById(id);
     if(Math.abs(due - checkoutCtx.total) >= 0.001){
       note.textContent = `已凑整至最近${roundingLabel()} (原价 ${fmt(checkoutCtx.total)})`;
@@ -964,6 +974,7 @@ function openCheckout(ctx){
     document.getElementById("qrHint").textContent = "尚未设置收款二维码,请到「设置」上传";
   }
   document.getElementById("btnConfirmQr").disabled = false;
+  document.getElementById("btnConfirmCard").disabled = false;
   showModal("checkoutModal");
 }
 
@@ -972,6 +983,12 @@ function switchPayTab(method){
   document.querySelectorAll("#checkoutModal .pay-tab").forEach(b=>b.classList.toggle("active", b.dataset.method===method));
   document.getElementById("payCash").classList.toggle("hidden", method!=="cash");
   document.getElementById("payQr").classList.toggle("hidden", method!=="qr");
+  document.getElementById("payCard").classList.toggle("hidden", method!=="card");
+}
+function copyCardAmount(){
+  const v = checkoutCtx ? checkoutCtx.cardDue.toFixed(2) : "";
+  if(navigator.clipboard && v) navigator.clipboard.writeText(v).then(()=> alertToast("已复制 " + v), ()=> alertToast("金额: " + v));
+  else alertToast("金额: " + v);
 }
 
 function buildQuickAmounts(){
@@ -1021,6 +1038,7 @@ function finalizeOrder(paymentMethod, extra){
   finalizingOrder = true;
   document.getElementById("btnConfirmCash").disabled = true;
   document.getElementById("btnConfirmQr").disabled = true;
+  document.getElementById("btnConfirmCard").disabled = true;
   try{
     finalizeOrderInner(paymentMethod, extra);
   }finally{
@@ -1030,7 +1048,7 @@ function finalizeOrder(paymentMethod, extra){
 function finalizeOrderInner(paymentMethod, extra){
   const ctx = checkoutCtx;
   const orderNo = activeOrderNo + (ctx.label ? "-"+ctx.label : "");
-  const finalTotal = paymentMethod==="cash" ? ctx.cashDue : ctx.qrDue;
+  const finalTotal = paymentMethod==="cash" ? ctx.cashDue : paymentMethod==="card" ? ctx.cardDue : ctx.qrDue;
   const order = {
     orderNo,
     date: todayStr(),
@@ -1046,6 +1064,7 @@ function finalizeOrderInner(paymentMethod, extra){
     paymentMethod,
     cashReceived: extra && extra.cashReceived,
     change: extra && extra.change,
+    payRef: (extra && extra.payRef) || undefined,
     isSplit: !!ctx.label,
     splitKind: ctx.splitKind || null,
     orderType: orderType,
@@ -1237,7 +1256,7 @@ function showReceipt(order, returnToSplitList){
     ${order.tax>0?`<div class="r-line"><span>服务税 (${order.taxRate}%)</span><span>${fmt(order.tax)}</span></div>`:""}
     ${order.roundingAdj?`<div class="r-line"><span>四舍五入</span><span>${order.roundingAdj>0?"+"+fmt(order.roundingAdj):"-"+fmt(Math.abs(order.roundingAdj))}</span></div>`:""}
     <div class="r-line r-total"><span>总计</span><span>${fmt(order.total)}</span></div>
-    <div class="r-line"><span>付款方式</span><span>${order.paymentMethod==="cash"?"现金":"DuitNow / 电子钱包"}</span></div>
+    <div class="r-line"><span>付款方式</span><span>${payMethodLabel(order.paymentMethod, "html")}</span></div>
     ${order.paymentMethod==="cash"?`
       <div class="r-line"><span>实收</span><span>${fmt(order.cashReceived)}</span></div>
       <div class="r-line"><span>找零</span><span>${fmt(order.change)}</span></div>
@@ -1658,6 +1677,7 @@ function computeDailySummary(todays){
     totalSales: round2(valid.reduce((s,o)=>s+o.total,0)),
     cashSales: round2(valid.filter(o=>o.paymentMethod==="cash").reduce((s,o)=>s+o.total,0)),
     qrSales: round2(valid.filter(o=>o.paymentMethod==="qr").reduce((s,o)=>s+o.total,0)),
+    cardSales: round2(valid.filter(o=>o.paymentMethod==="card").reduce((s,o)=>s+o.total,0)),
     totalDiscount: round2(valid.reduce((s,o)=>s+(o.discount||0),0)),
     totalTax: round2(valid.reduce((s,o)=>s+(o.tax||0),0)),
     // Orders from before dine-in/take-away existed have no orderType and land in neither bucket.
@@ -1706,6 +1726,7 @@ function renderHistoryStats(todays){
     <div class="stat">总营业额<b>${fmt(s.totalSales)}</b></div>
     <div class="stat">现金<b>${fmt(s.cashSales)}</b></div>
     <div class="stat">电子钱包<b>${fmt(s.qrSales)}</b></div>
+    ${s.cardSales>0 ? `<div class="stat">刷卡/Tap<b>${fmt(s.cardSales)}</b></div>` : ""}
   `;
   // Only reachable once the same PIN gate above unlocked revenue stats — the settlement is
   // basically those same numbers made printable, so it inherits the same visibility rule rather
@@ -1730,7 +1751,7 @@ function openHistory(){
       row.innerHTML = `
         <div>
           <div class="h-no">${escapeHtml(o.orderNo)} · ${fmt(o.total)}</div>
-          <div class="h-method">${o.time} · ${o.paymentMethod==="cash"?"现金":"电子钱包"}${o.isSplit?" · 分单":""}${orderTypeLabel(o.orderType, o.table) ? " · "+escapeHtml(orderTypeLabel(o.orderType, o.table)) : ""}</div>
+          <div class="h-method">${o.time} · ${payMethodLabel(o.paymentMethod)}${o.payRef ? " · 参考 "+escapeHtml(o.payRef) : ""}${o.isSplit?" · 分单":""}${orderTypeLabel(o.orderType, o.table) ? " · "+escapeHtml(orderTypeLabel(o.orderType, o.table)) : ""}</div>
         </div>
         ${o.voided ? `<span class="h-voided-tag">已作废</span>` : `
           <div class="h-actions">
@@ -3261,16 +3282,16 @@ function exportHistoryCsv(){
   const end = document.getElementById("csvEndDate").value || todayStr();
   const filtered = history.filter(o=> o.date>=start && o.date<=end);
   if(filtered.length===0){ alertToast("这段范围内没有订单记录"); return; }
-  const rows = [["订单号","日期","时间","付款方式","小计","折扣","服务税","四舍五入","总计","是否分单","是否作废","类型","桌号","员工"]];
+  const rows = [["订单号","日期","时间","付款方式","小计","折扣","服务税","四舍五入","总计","是否分单","是否作废","类型","桌号","员工","参考号"]];
   filtered.forEach(o=> rows.push([
-    o.orderNo, o.date, o.time, o.paymentMethod==="cash"?"现金":"电子钱包",
+    o.orderNo, o.date, o.time, payMethodLabel(o.paymentMethod),
     o.subtotal, o.discount||0, o.tax||0, o.roundingAdj||0, o.total,
     o.isSplit?"是":"否", o.voided?"是":"否",
-    o.orderType==="dinein" ? "堂食 Dine In" : o.orderType==="takeaway" ? "外带 Take Away" : "", o.table || "", o.staffName || ""
+    o.orderType==="dinein" ? "堂食 Dine In" : o.orderType==="takeaway" ? "外带 Take Away" : "", o.table || "", o.staffName || "", o.payRef || ""
   ]));
   const validRows = filtered.filter(o=>!o.voided);
   rows.push([]);
-  rows.push(["合计 (不含已作废)","","","", "", "", "", "", validRows.reduce((s,o)=>s+o.total,0).toFixed(2), "", "", "", "", ""]);
+  rows.push(["合计 (不含已作废)","","","", "", "", "", "", validRows.reduce((s,o)=>s+o.total,0).toFixed(2), "", "", "", "", "", ""]);
   const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n");
   downloadBlob("﻿"+csv, `sales-${start}_to_${end}.csv`, "text/csv;charset=utf-8");
   alertToast("销售记录已导出");
@@ -3718,7 +3739,7 @@ function receiptToPrintBlocks(order){
   if(order.tax>0) blocks.push({ text: `服务税  ${fmt(order.tax)}`, align:"right" });
   if(order.roundingAdj) blocks.push({ text: `四舍五入  ${order.roundingAdj>0?"+":"-"}${fmt(Math.abs(order.roundingAdj))}`, align:"right" });
   blocks.push({ text: `总计  ${fmt(order.total)}`, bold:true, size:"lg", align:"right", spacingAfter:6 });
-  blocks.push({ text: `付款方式: ${order.paymentMethod==="cash"?"现金":"DuitNow/电子钱包"}` });
+  blocks.push({ text: `付款方式: ${payMethodLabel(order.paymentMethod, "print")}` });
   if(order.paymentMethod==="cash"){
     blocks.push({ text: `实收 ${fmt(order.cashReceived)}  找零 ${fmt(order.change)}` });
   }
@@ -3752,6 +3773,7 @@ function showSettlement(){
     <hr>
     <div class="r-line"><span>现金</span><span>${fmt(s.cashSales)}</span></div>
     <div class="r-line"><span>DuitNow / 电子钱包</span><span>${fmt(s.qrSales)}</span></div>
+    ${s.cardSales>0 ? `<div class="r-line"><span>刷卡 / Tap</span><span>${fmt(s.cardSales)}</span></div>` : ""}
     ${s.totalDiscount>0 ? `<div class="r-line"><span>折扣总额</span><span>-${fmt(s.totalDiscount)}</span></div>` : ""}
     ${s.totalTax>0 ? `<div class="r-line"><span>服务税总额</span><span>${fmt(s.totalTax)}</span></div>` : ""}
     <div class="r-line r-total"><span>总营业额</span><span>${fmt(s.totalSales)}</span></div>
@@ -3777,6 +3799,7 @@ function settlementToPrintBlocks(s, dateStr){
   blocks.push({ text: "--------------------------------", spacingAfter:4 });
   blocks.push({ text: `现金  ${fmt(s.cashSales)}`, align:"right" });
   blocks.push({ text: `DuitNow/电子钱包  ${fmt(s.qrSales)}`, align:"right" });
+  if(s.cardSales>0) blocks.push({ text: `刷卡/Tap  ${fmt(s.cardSales)}`, align:"right" });
   if(s.totalDiscount>0) blocks.push({ text: `折扣总额  -${fmt(s.totalDiscount)}`, align:"right" });
   if(s.totalTax>0) blocks.push({ text: `服务税总额  ${fmt(s.totalTax)}`, align:"right" });
   blocks.push({ text: `总营业额  ${fmt(s.totalSales)}`, bold:true, size:"lg", align:"right", spacingAfter:10 });
@@ -4860,6 +4883,10 @@ function init(){
   document.getElementById("btnConfirmQr").onclick = ()=>{
     finalizeOrder("qr", {});
   };
+  document.getElementById("btnConfirmCard").onclick = ()=>{
+    finalizeOrder("card", { payRef: document.getElementById("cardRef").value.trim().slice(0, 20) });
+  };
+  document.getElementById("btnCopyCardAmount").onclick = copyCardAmount;
 
   document.getElementById("btnHistory").onclick = openHistory;
   document.getElementById("btnSettings").onclick = openSettings;

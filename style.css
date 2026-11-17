@@ -321,10 +321,11 @@ input{font-family:inherit;}
   padding:12px 4px;border-radius:10px;border:1px solid var(--border);
   background:#f4f1ec;font-weight:700;font-size:14px;
 }
-#cashReceived{
+#cashReceived,#cardRef{
   width:100%;padding:16px;font-size:22px;text-align:center;font-weight:800;
   border:2px solid var(--border);border-radius:12px;margin-bottom:12px;
 }
+#cardRef{font-size:16px;padding:12px;font-weight:600;}
 .change-row{
   display:flex;justify-content:space-between;padding:12px 4px;
   font-size:16px;font-weight:700;margin-bottom:14px;

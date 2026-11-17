@@ -78,6 +78,7 @@ function computeStats(orders){
   const totalRevenue = valid.reduce((s,o)=>s+(o.total||0),0);
   const cashRevenue = valid.filter(o=>o.paymentMethod==="cash").reduce((s,o)=>s+(o.total||0),0);
   const qrRevenue = valid.filter(o=>o.paymentMethod==="qr").reduce((s,o)=>s+(o.total||0),0);
+  const cardRevenue = valid.filter(o=>o.paymentMethod==="card").reduce((s,o)=>s+(o.total||0),0);
   const avg = valid.length ? totalRevenue/valid.length : 0;
 
   const byDay = {};
@@ -124,7 +125,7 @@ function computeStats(orders){
     if(r) (o.items||[]).forEach(it=>{ if(it.isBeverage) r.cups += it.qty||0; });
   });
   const staffRows = [...staffMap.values()].sort((a,b)=>b.revenue-a.revenue);
-  return { beverageCups, beverageRevenue, dineInRevenue, takeawayRevenue, totalRevenue, cashRevenue, qrRevenue, avg, orderCount: valid.length, dayRows, maxDay, topItems, staffRows };
+  return { beverageCups, beverageRevenue, dineInRevenue, takeawayRevenue, totalRevenue, cashRevenue, qrRevenue, cardRevenue, avg, orderCount: valid.length, dayRows, maxDay, topItems, staffRows };
 }
 
 function render(orders){
@@ -133,6 +134,8 @@ function render(orders){
   document.getElementById("statOrders").textContent = stats.orderCount;
   document.getElementById("statAvg").textContent = fmt(stats.avg);
   document.getElementById("statSplit").textContent = `${fmt(stats.cashRevenue)} / ${fmt(stats.qrRevenue)}`;
+  document.getElementById("statCardWrap").classList.toggle("hidden", !(stats.cardRevenue>0));
+  document.getElementById("statCard").textContent = fmt(stats.cardRevenue);
   document.getElementById("statBeverage").textContent = `${stats.beverageCups} 杯 / ${fmt(stats.beverageRevenue)}`;
   document.getElementById("statType").textContent = `${fmt(stats.dineInRevenue)} / ${fmt(stats.takeawayRevenue)}`;
 
@@ -186,7 +189,7 @@ function render(orders){
       <tr class="${o.voided?"voided":""}">
         <td>${escapeHtml(o.orderNo)}</td>
         <td>${escapeHtml(o.date)} ${escapeHtml(o.time)}</td>
-        <td>${o.paymentMethod==="cash"?"现金":"电子钱包"}</td>
+        <td>${o.paymentMethod==="cash"?"现金":o.paymentMethod==="card"?"刷卡/Tap":"电子钱包"}</td>
         <td>${o.orderType==="takeaway" ? "外带 Take Away" : o.orderType==="dinein" ? "堂食 Dine In"+(o.table ? " 桌"+escapeHtml(o.table) : "") : ""}</td>
         <td>${fmt(o.total)}</td>
         <td>${escapeHtml(o.staffName||"")}</td>

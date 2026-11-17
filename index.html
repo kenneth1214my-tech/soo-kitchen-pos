@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Soo's Kitchen POS</title>
-<link rel="manifest" href="manifest.json?v=202611152100">
+<link rel="manifest" href="manifest.json?v=202611171200">
 <meta name="theme-color" content="#d9480f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Soo's POS">
-<link rel="apple-touch-icon" href="icon-192.png?v=202611152100">
-<link rel="icon" href="icon-192.png?v=202611152100">
+<link rel="apple-touch-icon" href="icon-192.png?v=202611171200">
+<link rel="icon" href="icon-192.png?v=202611171200">
 <script>
 // Recovery switch for a misbehaving device: open index.html?reset=1 once to unregister the service
 // worker, wipe its cached copy of the app, and reload clean. Sales/menu data (localStorage) is NOT touched.
@@ -24,7 +24,7 @@
   Promise.all(tasks).then(done, done);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=202611152100">
+<link rel="stylesheet" href="style.css?v=202611171200">
 </head>
 <body>
 
@@ -98,7 +98,8 @@
     <div class="modal-header"><span>结账</span><button class="close-btn" data-close="checkoutModal">✕</button></div>
     <div class="pay-tabs">
       <button class="pay-tab active" data-method="cash">💵 现金</button>
-      <button class="pay-tab" data-method="qr">📱 DuitNow / 电子钱包</button>
+      <button class="pay-tab" data-method="qr">📱 电子钱包</button>
+      <button class="pay-tab" data-method="card">💳 刷卡/Tap</button>
     </div>
 
     <div id="payCash" class="pay-panel">
@@ -119,6 +120,15 @@
       <img id="qrImage" src="" alt="DuitNow QR" class="qr-image">
       <p id="qrHint" class="hint">出示二维码给顾客扫描付款</p>
       <button id="btnConfirmQr" class="primary-btn">确认已收到付款</button>
+    </div>
+
+    <div id="payCard" class="pay-panel hidden">
+      <div class="due-amount">应付 <span id="dueAmountCard">RM0.00</span></div>
+      <p id="cardRoundingNote" class="hint hidden"></p>
+      <button id="btnCopyCardAmount" class="secondary-btn" style="width:100%;margin:0 0 10px;">📋 复制金额</button>
+      <p class="hint">在收款 App(如 Tap2Phone / Tap n Pay)输入上面的金额,请顾客碰卡或手机。付款成功后,再按下面的确认。</p>
+      <input type="text" id="cardRef" maxlength="20" placeholder="参考号 / 卡号后4位 (选填,对账用)" autocomplete="off">
+      <button id="btnConfirmCard" class="primary-btn">确认已刷卡成功</button>
     </div>
   </div>
 </div>
@@ -598,6 +608,6 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
-<script src="app.js?v=202611152100" defer></script>
+<script src="app.js?v=202611171200" defer></script>
 </body>
 </html>
